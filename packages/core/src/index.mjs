@@ -1,6 +1,7 @@
 /**
- * Stateless Streamable HTTP MCP relay for Cloudflare Workers.
- * Transport PoC only. No OAuth handoff, persistence, or audited authorization.
+ * Stateless MCP relay for Cloudflare Workers. Supports direct upstream or
+ * authenticated local relay over an Access-protected Cloudflare Tunnel.
+ * No OAuth tokens are copied into Workers; local mcp-remote owns its cache.
  */
 const MAX_REQUEST_BYTES = 262_144;
 const ALLOWED_METHODS = new Set([
@@ -43,6 +44,32 @@ function rpcError(payload, message) {
     error: {code: -32001, message}}, 403);
 }
 
+// A local relay is reached through an Access-protected Cloudflare Tunnel.
+// Secrets and destination come only from Worker bindings, never caller inputs.
+function getRoute(env,fixedUpstream) {
+  const mode=env.ATLASSIAN_UPSTREAM_MODE ?? 'direct';
+  if(mode==='direct') {
+    if(!upstreamCredentialValid(env.UPSTREAM_AUTHORIZATION)) return null;
+    return {url:fixedUpstream,authorization:env.UPSTREAM_AUTHORIZATION,access:null};
+  }
+  if(mode!=='local_relay')return null;
+  if(typeof env.LOCAL_RELAY_BEARER_TOKEN!=='string' ||
+     env.LOCAL_RELAY_BEARER_TOKEN.length<32 ||
+     typeof env.CF_ACCESS_CLIENT_ID!=='string' ||
+     !env.CF_ACCESS_CLIENT_ID ||
+     typeof env.CF_ACCESS_CLIENT_SECRET!=='string' ||
+     env.CF_ACCESS_CLIENT_SECRET.length<32) return null;
+  let url;
+  try {
+    url=new URL(env.LOCAL_RELAY_ORIGIN);
+    if(url.protocol!=='https:'||!url.hostname.includes('.')||
+       url.username||url.password||url.search||url.hash||
+       url.pathname!=='/'||url.port) return null;
+  }catch{return null;}
+  return {url:new URL('/mcp',url),authorization:'Bearer '+env.LOCAL_RELAY_BEARER_TOKEN,
+    access:{id:env.CF_ACCESS_CLIENT_ID,secret:env.CF_ACCESS_CLIENT_SECRET}};
+}
+
 function upstreamCredentialValid(value) {
   return typeof value === 'string' && /^(Bearer|Basic) [^\r\n]{10,}$/.test(value);
 }
@@ -73,9 +100,8 @@ export function createMcpRelay(config) {
       if (!(await equalSecret(supplied, env.PORTAL_BEARER_TOKEN))) {
         return json({error:'unauthorized'}, 401);
       }
-      if (!upstreamCredentialValid(env.UPSTREAM_AUTHORIZATION)) {
-        return json({error:'upstream_not_configured'}, 503);
-      }
+      const route=getRoute(env,upstream);
+      if (!route) return json({error:'upstream_not_configured'},503);
 
       let requestBody;
       if (request.method === 'POST') {
@@ -126,11 +152,15 @@ export function createMcpRelay(config) {
         const value = request.headers.get(key);
         if (value !== null) headers.set(key,value);
       }
-      headers.set('authorization',env.UPSTREAM_AUTHORIZATION);
+      headers.set('authorization',route.authorization);
+      if(route.access) {
+        headers.set('cf-access-client-id',route.access.id);
+        headers.set('cf-access-client-secret',route.access.secret);
+      }
       if (!headers.has('accept')) headers.set('accept','application/json, text/event-stream');
       try {
         // Fixed URL; never forward caller-provided query strings or redirects.
-        const response = await fetch(upstream.toString(), {
+        const response = await fetch(route.url.toString(), {
           method: request.method, headers,
           ...(request.method === 'POST' ? {body: requestBody} : {}),
           redirect:'manual',

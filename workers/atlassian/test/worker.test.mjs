@@ -155,3 +155,48 @@ test('wrong Portal bearer token does not contact upstream',async () => {
     assert.equal(r.status,401);
   });
 });
+
+
+test('local relay route sends only server-bound tunnel and Access credentials',async()=>{
+ const secrets={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay',
+   LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/',
+   LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+   CF_ACCESS_CLIENT_ID:'cf-service-id',
+   CF_ACCESS_CLIENT_SECRET:'c'.repeat(48),
+   UPSTREAM_AUTHORIZATION:''};
+ await withFetch(async(url,opts)=>{
+   assert.equal(String(url),'https://atlassian-relay.example.com/mcp');
+   assert.equal(opts.headers.get('authorization'),'Bearer '+'r'.repeat(48));
+   assert.equal(opts.headers.get('cf-access-client-id'),'cf-service-id');
+   assert.equal(opts.headers.get('cf-access-client-secret'),'c'.repeat(48));
+   assert.equal(opts.headers.get('cookie'),null);
+   assert.equal(opts.headers.get('x-relay-url'),null);
+   return new Response('{"jsonrpc":"2.0","id":1,"result":{}}',{headers:{'content-type':'application/json'}});
+ },async()=>{
+   const r=await worker.fetch(request('POST',call('ping'),{
+     ...auth,'x-relay-url':'https://evil.example','cf-access-client-secret':'ATTACKER',cookie:'BAD'
+   }),secrets);
+   assert.equal(r.status,200);
+ });
+});
+test('relay mode fails closed on missing or invalid credentials and URLs',async()=>{
+ const b={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay',
+   LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/',
+   LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+   CF_ACCESS_CLIENT_ID:'cf-service-id',CF_ACCESS_CLIENT_SECRET:'c'.repeat(48)};
+ await withFetch(()=>{throw Error('must not contact upstream')},async()=>{
+   for(const changes of [
+     {LOCAL_RELAY_BEARER_TOKEN:''},
+     {CF_ACCESS_CLIENT_SECRET:''},
+     {CF_ACCESS_CLIENT_ID:''},
+     {LOCAL_RELAY_ORIGIN:'http://atlassian-relay.example.com/'},
+     {LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/evil'},
+     {LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/?redirect=https://evil.example'},
+     {LOCAL_RELAY_ORIGIN:'https://127.0.0.1/'},
+     {ATLASSIAN_UPSTREAM_MODE:'unknown'},
+   ]){
+     const r=await worker.fetch(request('POST',call('initialize'),auth),{...b,...changes});
+     assert.equal(r.status,503);
+   }
+ });
+});
