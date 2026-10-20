@@ -11,6 +11,7 @@ The following commands assume sibling repositories, as in the existing local set
 ~~~bash
 cd ~/program/private/mcp-bridge-workers
 git pull
+npm install --ignore-scripts --no-audit --no-fund
 npm test
 
 cd ../chatgpt-mcp-tunnel

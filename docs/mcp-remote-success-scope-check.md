@@ -13,6 +13,7 @@ Run the following exactly on the trusted Linux workstation. It invokes Node rath
 ```bash
 cd ~/program/private/mcp-bridge-workers
 git pull
+npm install --ignore-scripts --no-audit --no-fund
 npm test
 
 cd ../chatgpt-mcp-tunnel
@@ -22,6 +23,12 @@ docker compose --profile auth run --rm -T --no-deps \
 ```
 
 The helper locally opens only files matching mcp-remote-v1/*_tokens.json and reads scope / requested_scope from them, although those files also contain sensitive authentication credentials. It outputs **only predetermined booleans and counts**. It never prints token strings, client IDs, exact scope names beyond the fixed classification labels, organization/tenant names or file paths. No network API calls are made. Do not upload the raw file, include detailed debug logs, or run the original OAuth/login command as a substitute.
+
+## Actual operator output (2026-10-20 JST)
+
+The operator ran the existing successful tunnel's inspector and obtained `result=no_token_records` and `record_count=0`. This is a **completed read-only inspection with no matching persisted token files**, not an OAuth failure and not proof that the previously observed working tunnel never authenticated. The earlier registration inspection found one persisted `*_client_info.json`, but such registration metadata does not contain the actual requested/granted scope values. Thus **this line of scope comparison is BLOCKED_BY_MISSING_PERSISTED_TOKEN_EVIDENCE**. No further DCR registration/login is justified solely to make this diagnostic return data.
+
+The same execution showed local `npm test` failing with `ERR_MODULE_NOT_FOUND: @mcp-bridge/core` because workspace installation had not been performed. Add the normal npm workspace install shown above; the Node.js v26.12.0 invocation has not independently been validated in CI (which uses 20 and 22). The failure is independent of the safe Docker inspection result.
 
 ## Interpreting the result
 
