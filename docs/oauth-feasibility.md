@@ -1,6 +1,6 @@
 # Atlassian Rovo MCP **v2** OAuth feasibility
 
-Status (2026-10-20 JST): **v2 protected-resource and Atlassian Identity authorization metadata confirmed by operator; DCR registration HTTP success but response classification pending after a strict-validation false negative**. This project must NOT treat successful discovery of `https://mcp.atlassian.com/.well-known/oauth-authorization-server` as proof of v2 readiness.
+Status (2026-10-20 JST): **v2 protected-resource and Atlassian Identity authorization metadata confirmed; validated public-client DCR response accepted; Atlassian consent displayed but rejected after Accept twice (`invalid_request`); localhost callback NOT PROVEN; no token exchange or Worker handoff**. This project must NOT treat successful discovery of `https://mcp.atlassian.com/.well-known/oauth-authorization-server` as proof of v2 readiness.
 
 ## Why the earlier v1 login was wrong
 
@@ -113,7 +113,7 @@ No additional OAuth registration or login has been executed by this patch. A liv
 | Gate | State |
 |---|---|
 | Public v2 resource metadata in this environment | VERIFIED_BY_OPERATOR (metadata only) |
-| Tenant-scoped DCR registration | HTTP_2XX_OBSERVED; valid public-client response NOT YET CONFIRMED |
+| Tenant-scoped DCR registration | VERIFIED_BY_OPERATOR (V2_DCR_ACCEPTED, issuer scoped; persisted client metadata independent success observed) |
 | Organization-specific localhost loopback and Bitbucket consent | CONSENT_SCREEN_REACHED; INVALID_REQUEST_AFTER_ACCEPT; LOOPBACK_CALLBACK_NOT_CONFIRMED |
 | Token exchange and refresh | NOT IMPLEMENTED |
 | Safe localhost-to-Worker token handoff | NOT IMPLEMENTED |
@@ -136,27 +136,27 @@ The source-level comparison of DCR request metadata, response validation/storage
 
 ## Confirmed second consent failure after prompt experiment (2026-10-20 JST)
 
-The operator explicitly confirmed a **second** attempt, using Bridge with \`prompt=consent\`, displayed the Atlassian consent screen. **After clicking Accept**, Atlassian again showed:
+The operator explicitly confirmed a **second** attempt, using Bridge with `prompt=consent`, displayed the Atlassian consent screen. **After clicking Accept**, Atlassian again showed:
 
-\`\`\`text
+```text
 invalid_request
 Incorrect request parameters
-\`\`\`
+```
 
 The local probe printed:
 
-\`\`\`text
+```text
 V2_DCR_PUBLIC_CLIENT_SECRET_IGNORED
 V2_DCR_ACCEPTED: public client and exact callback verified.
 V2_LOCALHOST_NOT_CONFIRMED: no callback before timeout.
 TOKEN_EXCHANGE_NOT_TESTED; WORKER_HANDOFF_NOT_IMPLEMENTED.
-\`\`\`
+```
 
-The operator redacted the \`client_id\` and PKCE parameters from the URL they shared; **this redaction is not evidence those fields were absent from the actual request**. The current \`makeAuthorizationUrl\` inserts \`client_id\`, \`code_challenge\`, and \`code_challenge_method=S256\`. The user confirmed \`invalid_request\` occurred immediately after Accept, not merely a silent localhost timeout. The authorization server did not complete authorization; local callback timed out as a downstream consequence.
+The operator redacted the `client_id` and PKCE parameters from the URL they shared; **this redaction is not evidence those fields were absent from the actual request**. The current `makeAuthorizationUrl` inserts `client_id`, `code_challenge`, and `code_challenge_method=S256`. The user confirmed `invalid_request` occurred immediately after Accept, not merely a silent localhost timeout. The authorization server did not complete authorization; local callback timed out as a downstream consequence.
 
-**Result of controlled experiment:** Adding \`prompt=consent\` did **not** solve the consent-time error. Do not characterize prompt as a required fix. DCR response validation passed; \`client_secret\` with \`token_endpoint_auth_method=none\` is compatible with the separately successful \`mcp-remote\` observation.
+**Result of controlled experiment:** Adding `prompt=consent` did **not** solve the consent-time error. Do not characterize prompt as a required fix. DCR response validation passed; `client_secret` with `token_endpoint_auth_method=none` is compatible with the separately successful `mcp-remote` observation.
 
-**Do not rerun identical probes**: each one creates a fresh DCR client. The next recommended work is offline comparison of the actual v2 DCR request semantics with the working \`mcp-remote@0.14.3\` (registration grants, effective scope derivation, and issuer consistency). Neither the missing \`refresh_token\` grant nor the narrow Bitbucket Read scope has been proven causal; do not introduce write/delete/manage scopes. If the registration metadata checks out, the Atlassian Developer Community report [#103197](https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197) recommends providing a prior error reference ID and timestamp **privately** to Atlassian support. An independently reported similar result is not evidence of an Atlassian product fault.
+**Do not rerun identical probes**: each one creates a fresh DCR client. The next recommended work is offline comparison of the actual v2 DCR request semantics with the working `mcp-remote@0.14.3` (registration grants, effective scope derivation, and issuer consistency). Neither the missing `refresh_token` grant nor the narrow Bitbucket Read scope has been proven causal; do not introduce write/delete/manage scopes. If the registration metadata checks out, the Atlassian Developer Community report [#103197](https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197) recommends providing a prior error reference ID and timestamp **privately** to Atlassian support. An independently reported similar result is not evidence of an Atlassian product fault.
 
 **Gates remain:** CONSENT=FAILED; CALLBACK=NOT_PROVEN; TOKEN_EXCHANGE=NOT_TESTED; WORKER_HANDOFF=NOT_IMPLEMENTED. No DCR POST, login, or token transfer was executed by the assistant in producing this record.
 
