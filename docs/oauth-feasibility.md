@@ -129,3 +129,7 @@ A matching callback alone cannot prove that Bitbucket tools are accessible. The 
 - Atlassian OAuth provider migration announcement: https://community.atlassian.com/forums/discussion/3227514/atlassian-rovo-mcp-oauth-updates
 - Discovery configuration example: https://www.truefoundry.com/docs/ai-gateway/mcp/atlassian-rovo-mcp-server
 - OAuth Protected Resource Metadata (RFC 9728): https://datatracker.ietf.org/doc/html/rfc9728
+
+## OpenCode DCR comparison (2026-10-20)
+
+The source-level comparison of DCR request metadata, response validation/storage, and the operator-observed authorization URLs is recorded in [OpenCode vs Bridge DCR comparison](atlassian-opencode-dcr-diff.md). OpenCode's provider metadata includes `client_uri=https://opencode.ai` and both `authorization_code` and `refresh_token` grant types; the Bridge omits `client_uri` and currently registers only `authorization_code`. Actual OpenCode DCR HTTP POST bytes and either app's full returned registration response are **NOT AVAILABLE**. These differences are not yet proven to cause the consent-time `invalid_request`. No runtime or auth flow change was made as part of this comparison.
