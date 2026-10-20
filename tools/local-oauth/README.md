@@ -19,3 +19,5 @@ This can create a registration at Atlassian. It requests a read-only Bitbucket s
 Read [the v2 verification protocol](../../docs/oauth-feasibility.md) before executing. Never post authorization URLs, redirect query strings, IDs or credentials.
 
 Atlassian v2 DCR may return `client_secret` even with `token_endpoint_auth_method=none`. The probe checks the returned public-client method and exact loopback URI, discards any secret, and prints only sanitized validation statuses. HTTP 2xx can create a client even if the tool reports a validation error; do not repeatedly rerun DCR.
+
+Source-level comparison with the working `mcp-remote@0.14.3` is recorded in [the verification protocol](../../docs/oauth-feasibility.md#offline-mcp-remote-v0143-vs-bridge-dcr-request-verification-2026-10-20-jst). The ineffective `prompt=consent` experiment was reverted. Do not re-run the same probe without an approved, isolated hypothesis: each run registers another OAuth client. The pure `dcr-request.mjs` builder and local tests do not perform DCR or any network operations.

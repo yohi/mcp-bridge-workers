@@ -7,6 +7,7 @@ import http from 'node:http';
 import {inspectDiscovery, BITBUCKET_READ_SCOPE} from './discovery.mjs';
 import {makeOAuthChallenge,makeAuthorizationUrl,classifyCallback} from './probe-core.mjs';
 import {validatePublicRegistration} from './registration-result.mjs';
+import {makeReadOnlyDcrRequest} from './dcr-request.mjs';
 
 const args = process.argv.slice(2);
 if (!args.includes('--register')) {
@@ -60,14 +61,7 @@ try {
   const response=await fetch(metadata.registration_endpoint,{
     method:'POST',redirect:'error',
     headers:{'content-type':'application/json','accept':'application/json'},
-    body:JSON.stringify({
-      client_name:'mcp-bridge-workers v2 localhost feasibility probe',
-      redirect_uris:[redirectUri],
-      grant_types:['authorization_code'],
-      response_types:['code'],
-      token_endpoint_auth_method:'none',
-      scope:scopes.join(' '),
-    }),
+    body:JSON.stringify(makeReadOnlyDcrRequest(redirectUri)),
     signal:AbortSignal.timeout(15000),
   });
   if(!response.ok) {

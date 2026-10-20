@@ -159,3 +159,21 @@ The operator redacted the \`client_id\` and PKCE parameters from the URL they sh
 **Do not rerun identical probes**: each one creates a fresh DCR client. The next recommended work is offline comparison of the actual v2 DCR request semantics with the working \`mcp-remote@0.14.3\` (registration grants, effective scope derivation, and issuer consistency). Neither the missing \`refresh_token\` grant nor the narrow Bitbucket Read scope has been proven causal; do not introduce write/delete/manage scopes. If the registration metadata checks out, the Atlassian Developer Community report [#103197](https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197) recommends providing a prior error reference ID and timestamp **privately** to Atlassian support. An independently reported similar result is not evidence of an Atlassian product fault.
 
 **Gates remain:** CONSENT=FAILED; CALLBACK=NOT_PROVEN; TOKEN_EXCHANGE=NOT_TESTED; WORKER_HANDOFF=NOT_IMPLEMENTED. No DCR POST, login, or token transfer was executed by the assistant in producing this record.
+
+## Offline mcp-remote v0.14.3 vs Bridge DCR request verification (2026-10-20 JST)
+
+The successful [chatgpt-mcp-tunnel](https://github.com/yohi/chatgpt-mcp-tunnel) pins [mcp-remote v0.14.3](https://github.com/punkpeye/mcp-remote/blob/v0.14.3/src/lib/node-oauth-client-provider.ts). We compared the **provider's source-level registration request metadata** with the Bridge's actual DCR POST body and its authorization URL. The successful client's persisted response was independently inspected by the operator; it does not contain the original POST bytes.
+
+| Element | Working mcp-remote@0.14.3 (source-level metadata) | Bridge (actual registration builder) | Inference |
+| --- | --- | --- | --- |
+| `grant_types` | `authorization_code`, `refresh_token` | `authorization_code` | Distinct. No evidence that refresh grant is required for consent; do not silently add it to a code-discarding spike. |
+| `scope` | Prefers explicit configuration, then WWW-Authenticate challenge, then PRM `scopes_supported`, then DCR response and authorization-server metadata | Pinned to `read:bitbucket:agent-interface` | Distinct. Avoid copying broad write/delete/manage scopes; a narrower scope is not proven invalid. |
+| `client_uri` | Populated (MCP CLI GitHub URL), with software id/version | Absent | Distinct, but RFC 7591 treats `client_uri` as optional. Lack of evidence of consent failure. |
+| `token_endpoint_auth_method` | Chooses advertised method, preferring `none` | `none` | Successful persisted response confirms `none`; not currently an actionable difference. |
+| `client_id` | DCR result or prior cached registration | Immediate accepted DCR result | Different values expected. Bridge's new registrations are not known to be invalid. |
+| `redirect_uri` | One exact loopback address/path | One exact `http://127.0.0.1:<port>/callback` | Distinct paths are normal. Bridge validator checks exact match. |
+| `prompt` | No explicit `--authorize-param prompt=consent` in working Docker Compose | Added experimentally; twice seen post-Accept `invalid_request` without/with it | Unsuccessful experiment was **reverted**. No evidence of an Atlassian requirement. |
+
+**Code change:** Extracted Bridge's *unchanged* production DCR body to `tools/local-oauth/dcr-request.mjs` for pure offline regression tests, added tests checking scope/redirect agreement and prohibiting additional privileges, and reverted the unsupported `prompt=consent` override. No grant expansion, scope expansion, network login, new DCR registration, or token operation was performed. The comparison does **not** establish a fix to the existing post-consent `invalid_request`.
+
+**Recommended next discriminating evidence:** the actual successful `mcp-remote@0.14.3` DCR HTTP POST (if legitimately available from an existing safe recording) versus Bridge's request builder; never fetch/replay raw credentials merely to create evidence. For a future explicitly authorized *single* registration, isolate `grant_types` as the first experimental variable with an explicit status gate, or obtain a private Atlassian support determination first. Do not repeat identical DCR registration attempts. 

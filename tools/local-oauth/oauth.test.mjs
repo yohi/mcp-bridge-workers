@@ -5,6 +5,7 @@ import {
   BITBUCKET_READ_SCOPE,authorizationMetadataCandidates
 } from './discovery.mjs';
 import {makeOAuthChallenge,makeAuthorizationUrl,classifyCallback} from './probe-core.mjs';
+import {makeReadOnlyDcrRequest} from './dcr-request.mjs';
 
 const issuer = AUTH_ORIGIN + '/test-authority';
 const metadata = {
@@ -107,8 +108,9 @@ test('authorize URL pins v2 resource and Bitbucket read scope, not v1',()=>{
   assert.equal(u.searchParams.get('resource'),RESOURCE);
   assert.equal(u.searchParams.get('scope'),BITBUCKET_READ_SCOPE);
   assert.equal(u.searchParams.get('code_challenge_method'),'S256');
-  assert.equal(u.searchParams.get('prompt'),'consent');
-  assert.equal(u.searchParams.getAll('prompt').length,1);
+  // Explicit consent prompt failed to resolve Atlassian's post-Accept error;
+  // working mcp-remote@0.14.3 did not set it. Avoid forcing it.
+  assert.equal(u.searchParams.has('prompt'),false);
   assert.deepEqual(u.searchParams.get('scope').split(' '),[BITBUCKET_READ_SCOPE]);
   assert.equal(u.searchParams.has('audience'),false);
   assert.ok(!u.toString().includes(a.verifier));
@@ -185,5 +187,50 @@ test('invalid DCR bodies are rejected without logging source data',()=>{
     assert.equal(result.ok,false);
     assert.deepEqual(Object.keys(result).sort(),
       ['ok','reason','unexpected_client_secret_ignored'].sort());
+  }
+});
+
+test('DCR request exactly pins a public-client Bitbucket Read-only registration',()=>{
+  const redirectUri='http://127.0.0.1:46331/callback';
+  const payload=makeReadOnlyDcrRequest(redirectUri);
+  assert.deepEqual(payload,{
+    client_name:'mcp-bridge-workers v2 localhost feasibility probe',
+    redirect_uris:[redirectUri],
+    grant_types:['authorization_code'],
+    response_types:['code'],
+    token_endpoint_auth_method:'none',
+    scope:BITBUCKET_READ_SCOPE,
+  });
+  assert.equal(payload.scope.includes('write:'),false);
+  assert.equal(payload.scope.includes('manage:'),false);
+  assert.equal(Object.hasOwn(payload,'client_uri'),false);
+  assert.equal(Object.hasOwn(payload,'software_id'),false);
+  assert.equal(Object.hasOwn(payload,'software_version'),false);
+  assert.equal(payload.grant_types.includes('refresh_token'),false);
+});
+test('DCR payload and v2 authorization URL use identical readonly scope and callback',()=>{
+  const redirectUri='http://127.0.0.1:46331/callback';
+  const payload=makeReadOnlyDcrRequest(redirectUri);
+  const c=makeOAuthChallenge();
+  const u=new URL(makeAuthorizationUrl({
+    endpoint:AUTH_ORIGIN+'/authorize',
+    clientId:'synthetic-client-id',
+    redirectUri,
+    challenge:c.challenge,
+    state:c.state,
+    scopes:[BITBUCKET_READ_SCOPE]
+  }));
+  assert.equal(u.searchParams.get('scope'),payload.scope);
+  assert.equal(u.searchParams.get('redirect_uri'),payload.redirect_uris[0]);
+  assert.equal(u.searchParams.get('resource'),RESOURCE);
+  assert.equal(u.searchParams.get('prompt'),null);
+});
+test('DCR builder rejects callbacks that are not exact loopback and never logs values',()=>{
+  for(const uri of ['https://example.org/callback','http://localhost:46331/callback',
+    'http://127.0.0.1/callback','http://127.0.0.1:46331/other',
+    'http://127.0.0.1:46331/callback?code=SENSITIVE_CODE']){
+    assert.throws(()=>makeReadOnlyDcrRequest(uri),{
+      message:'invalid_dcr_loopback_redirect'
+    });
   }
 });
