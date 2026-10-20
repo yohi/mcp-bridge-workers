@@ -35,3 +35,7 @@ The Worker may be deployed with `npm run deploy:atlassian` only after review. Re
 ## Cloudflare Tunnel backed by local OAuth (staged)
 
 The previously successful Bridge OAuth cache can now be used through a local HTTP→stdio adapter, with Cloudflare Access and a named Tunnel protecting the Worker→local hop. The Worker config selects `local_relay` and fails closed when its credentials are missing. No Atlassian OAuth token is copied into Workers. **Cloudflare deployment and actual Portal connection have not been executed.** See [operator runbook](docs/tunnel-local-relay.md).
+
+## Run Cloudflare Tunnel entirely within Docker
+
+An optional `tunnel` Compose profile runs the **official pinned `cloudflare/cloudflared:2026.10.1` image** without installing `cloudflared` on Ubuntu. It is never started automatically by the local relay or CI. Add the Cloudflare-issued connector token to the ignored `tools/local-oauth/.cloudflared-token` using a trusted editor; do not paste it into shell arguments, Git, logs or messages. Then run `npm run tunnel:cloudflare-local` and `npm run tunnel:cloudflare-local:status`; stop the connector only with `npm run tunnel:cloudflare-local:stop`. Access-protect the public hostname first. Full [operator setup](docs/tunnel-local-relay.md#docker-only-cloudflare-tunnel-connector-opt-in-2026-10-20).

@@ -70,3 +70,36 @@ test('Docker build context explicitly excludes local credential files',()=>{
   assert.match(ignore,/^!tools\/local-oauth\/Dockerfile\.mcp-remote$/m);
   assert.doesNotMatch(ignore,/^!tools\/local-oauth\/\.relay-token$/m);
 });
+
+
+test('cloudflared runs only with opt-in tunnel profile and official pinned image',()=>{
+  assert.match(compose,/cloudflared:\n\s+profiles: \[tunnel\]/);
+  assert.match(compose,/cloudflare\/cloudflared:2026\.10\.1/);
+  assert.match(compose,/user: "1000:1000"/);
+  assert.match(compose,/--token-file\n\s+- \/run\/cloudflared-tokens\/token/);
+  assert.match(compose,/--no-autoupdate/);
+  assert.match(compose,/network_mode: host/);
+  assert.doesNotMatch(compose,/TUNNEL_TOKEN:|--token\s+[^-]|\$\{TUNNEL_TOKEN\}/);
+  assert.doesNotMatch(compose,/docker\.sock|ports:/);
+});
+test('tunnel token staging is offline, isolated and rootless UID-safe',()=>{
+  assert.match(compose,/cloudflared-token-init:\n\s+profiles: \[tunnel\]/);
+  assert.match(compose,/cloudflared-token-init:\n[\s\S]*?network_mode: none/);
+  assert.match(compose,/source: \.\/\.cloudflared-token/);
+  assert.match(compose,/target: \/run\/bootstrap\/tunnel-token/);
+  assert.match(compose,/create_host_path: false/);
+  assert.match(compose,/cap_drop: \[ALL\]/);
+  assert.match(compose,/cap_add: \[CHOWN, DAC_OVERRIDE\]/);
+  assert.match(compose,/install -m 0400 \/run\/bootstrap\/tunnel-token \/run\/cloudflared-tokens\/\.token-next/);
+  assert.match(compose,/chown 1000:1000 \/run\/cloudflared-tokens\/\.token-next/);
+  assert.match(compose,/cloudflared-token-init:\n\s+condition: service_completed_successfully/);
+  assert.match(compose,/source: cloudflared-token-storage\n\s+target: \/run\/cloudflared-tokens\n\s+read_only: true/);
+  assert.match(compose,/^  cloudflared-token-storage:$/m);
+});
+test('tunnel secret path is ignored by Git and never added to Docker build context',()=>{
+  const gitignore=read('../../.gitignore');
+  const buildIgnore=read('../../.dockerignore');
+  assert.match(gitignore,/^tools\/local-oauth\/\.cloudflared-token$/m);
+  assert.match(buildIgnore,/^\*\*$/m);
+  assert.doesNotMatch(buildIgnore,/^!tools\/local-oauth\/\.cloudflared-token$/m);
+});

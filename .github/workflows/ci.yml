@@ -28,6 +28,19 @@ jobs:
           docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay run --rm --no-deps relay-secret-init
           docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay run --rm --no-deps --entrypoint sh relay -c 'test -r /run/relay-secrets/token && test "$(stat -c %u /run/relay-secrets/token)" = 1000 && test "$(stat -c %a /run/relay-secrets/token)" = 400'
           rm -f tools/local-oauth/.relay-token
+      - name: Validate cloudflared token staging with synthetic data (no Cloudflare login)
+        run: |
+          umask 077
+          printf '%s' 'ci-synthetic-cloudflare-token-NOT-REAL-abcdef012345' > tools/local-oauth/.cloudflared-token
+          docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel config --quiet
+          docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel run --rm --no-deps cloudflared-token-init
+          docker run --rm --user 1000:1000 -v mcp-bridge-atlassian-local-auth_cloudflared-token-storage:/run/cloudflared-tokens:ro --entrypoint node mcp-bridge-atlassian-auth:0.14.3 -e 'const fs=require("fs");const f="/run/cloudflared-tokens/token";if(process.getuid()!==1000)process.exit(2);if(fs.statSync(f).uid!==1000||fs.statSync(f).mode%4096!==256)process.exit(3);if(fs.readFileSync(f,"utf8").length<32)process.exit(4);console.log("TUNNEL_TOKEN_ACCESS_OK")'
+          rm -f tools/local-oauth/.cloudflared-token
+      - name: Verify pinned cloudflared image supports token-file without connecting to Cloudflare
+        run: |
+          docker pull cloudflare/cloudflared:2026.10.1
+          docker run --rm cloudflare/cloudflared:2026.10.1 tunnel run --help > /tmp/cloudflared-run-help.txt 2>&1
+          grep -q -- '--token-file' /tmp/cloudflared-run-help.txt
   test:
     runs-on: ubuntu-latest
     strategy:

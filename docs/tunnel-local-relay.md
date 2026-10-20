@@ -136,3 +136,61 @@ curl -i http://127.0.0.1:18787/health
 Bootstrap capability rationale: in an ordinary rootful Docker daemon, a `0600` bind-mounted file can retain the host user's UID rather than appear as UID 0. A temporary root bootstrap without `DAC_OVERRIDE` then cannot read it despite being UID 0. The isolated initializer therefore enables `CHOWN` to set ownership of the Docker-managed private volume and `DAC_OVERRIDE` to read the single read-only bind-mounted source in either mapping. It has `network_mode: none` and exits before the long-running, capability-free UID-1000 relay starts. It does not print the token value.
 
 Bootstrap portability fix: a rootful CI Docker job found that `install -o 1000 -g 1000 -m 0400` may `chown` **before** the final `chmod`, which fails once the temporary initializer has dropped `FOWNER`. The bootstrap now creates the file with `install -m 0400` **as its current owner**, then changes ownership to UID/GID 1000 as the last metadata operation. This avoids adding `FOWNER` capability to the initializer. The final mode/UID checks remain. No actual token content is logged.
+
+## Docker-only Cloudflare Tunnel connector (opt-in, 2026-10-20)
+
+The operator does **not** want `cloudflared` installed on Ubuntu. The Compose file now provides an **independently opt-in** `tunnel` profile that runs Cloudflare's official `cloudflare/cloudflared:2026.10.1` Docker image. It is **not launched** by `npm run relay:atlassian-local`, by CI, or by any OAuth command. Its code and configuration are staged only; **no Cloudflare Tunnel, Access application, route or actual credentials have been created or used**.
+
+### Dashboard configuration first
+
+1. Create a named **remotely managed** Cloudflare Tunnel in Cloudflare Zero Trust (for example `mcp-bridge-local`). The dashboard shows the `cloudflared tunnel run --token ...` command. **Copy only the token value** into a local file; do not paste the whole command into a terminal, an issue or chat.
+2. Create a Cloudflare Access **Self-hosted** application for the intended public hostname, with a **Service Auth** policy allowing only a dedicated Service Token. **No Bypass / Everyone rule.** Confirm the Access policy before exposing the published hostname.
+3. Set that same Tunnel's **Published application** route to service type `HTTP`, destination `http://127.0.0.1:18787`. Because the `cloudflared` and local `relay` containers both use `network_mode: host`, `127.0.0.1` refers to the same Linux host. Do not open a public host port, mount `docker.sock`, or install any binary on the host.
+4. Configure Worker secrets and Portal mapping per the earlier sections. Cloudflare Access Service Token and Worker relay bearer are **different credentials** from the Tunnel connector token.
+
+### Store the connector token without exposing it
+
+On the Linux host, in the Bridge repository:
+
+```bash
+cd ~/program/private/mcp-bridge-workers
+git pull
+umask 077
+# Only if the token file does not already exist:
+test ! -e tools/local-oauth/.cloudflared-token && \
+  ${EDITOR:-vi} tools/local-oauth/.cloudflared-token
+
+# Metadata only, NEVER print the file's contents.
+stat -c 'uid=%u gid=%g mode=%a' tools/local-oauth/.cloudflared-token
+```
+
+In the editor paste **only the Dashboard's Tunnel connector token**, save and quit. The file is Git-ignored and excluded from Docker build context. It should be owned by the host operator with mode 0600. Do not run `openssl rand` for this token—it is **Cloudflare-issued**, not locally generated. Do not print `docker compose config` while debugging; `--quiet` is safer.
+
+### Start and stop using Docker Compose (no host installation)
+
+First, the local relay must remain healthy:
+
+```bash
+curl -fsS http://127.0.0.1:18787/health
+```
+
+Start **only** the cloudflared connector, which initializes its dedicated private secret volume via an offline one-shot helper:
+
+```bash
+npm run tunnel:cloudflare-local
+npm run tunnel:cloudflare-local:status
+```
+
+The expected state is `cloudflared-token-init: Exited (0)` and `cloudflared: Up`. The connector is non-root UID 1000, read-only filesystem, caps dropped and `no-new-privileges`. It reads a **0400** token from its own **read-only** Docker named volume. The init copies the host token to this second local at-rest volume (offline, no token value in output). This does **not** use either the Atlassian OAuth cache or the separate `.relay-token` file.
+
+It requires `network_mode: host` because the authenticated local relay binds **only 127.0.0.1**. This reduces network isolation: the connector shares the host network namespace but has no host Docker socket or extra network capabilities. The official image is pinned to the published version tag; the digest has not been fixed, so schedule upgrades deliberately.
+
+Inspect Tunnel status in **Cloudflare Dashboard → Networking → Tunnels**. A running container does not prove that the Tunnel connected, Access authorized a request, or the Portal reached Atlassian. Do not share raw logs until checked for tokens and tenant details.
+
+To stop **only the connector** (leaves relay and OAuth cache running):
+
+```bash
+npm run tunnel:cloudflare-local:stop
+```
+
+To rotate the connector token, stop the connector, update the existing local file through a trusted editor, restart with `docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel up -d --force-recreate cloudflared`; the one-shot initializer will stage the current file, and the connector will re-read it. **Do not** run `docker compose down -v`: that would delete the successful local Atlassian OAuth cache and both private Docker token volumes.

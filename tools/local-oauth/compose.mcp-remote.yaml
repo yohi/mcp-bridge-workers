@@ -112,7 +112,83 @@ services:
       RELAY_SECRET_FILE: /run/relay-secrets/token
     entrypoint: ["node", "/opt/mcp-relay/server.mjs"]
 
+  # Explicit opt-in only: Cloudflare Tunnel is NOT started by the relay profile.
+  # The actual Tunnel token is a pre-existing 0600 host file, never a CLI arg
+  # or a Compose environment variable.
+  cloudflared-token-init:
+    profiles: [tunnel]
+    image: mcp-bridge-atlassian-auth:0.14.3
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ./.cloudflared-token
+        target: /run/bootstrap/tunnel-token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: cloudflared-token-storage
+        target: /run/cloudflared-tokens
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        set -eu
+        if ! test -r /run/bootstrap/tunnel-token; then
+          echo CLOUDFLARED_TOKEN_STAGE_FAILED: source_unreadable >&2
+          exit 1
+        fi
+        if ! test -f /run/bootstrap/tunnel-token; then
+          echo CLOUDFLARED_TOKEN_STAGE_FAILED: source_not_file >&2
+          exit 1
+        fi
+        trap 'rm -f /run/cloudflared-tokens/.token-next' EXIT
+        install -m 0400 /run/bootstrap/tunnel-token /run/cloudflared-tokens/.token-next
+        chown 1000:1000 /run/cloudflared-tokens/.token-next
+        mv -f /run/cloudflared-tokens/.token-next /run/cloudflared-tokens/token
+        test "$(stat -c %u /run/cloudflared-tokens/token)" = 1000
+        test "$(stat -c %a /run/cloudflared-tokens/token)" = 400
+        test -s /run/cloudflared-tokens/token
+        echo CLOUDFLARED_TOKEN_STAGED_FOR_NONROOT
+
+  # Uses host networking ONLY to reach the existing loopback-only relay at
+  # 127.0.0.1:18787. No host installation, socket mount or published port.
+  # Protect the public hostname with Access Service Auth BEFORE routing it.
+  cloudflared:
+    profiles: [tunnel]
+    image: cloudflare/cloudflared:2026.10.1
+    user: "1000:1000"
+    network_mode: host
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      cloudflared-token-init:
+        condition: service_completed_successfully
+    volumes:
+      - type: volume
+        source: cloudflared-token-storage
+        target: /run/cloudflared-tokens
+        read_only: true
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --loglevel
+      - info
+      - run
+      - --token-file
+      - /run/cloudflared-tokens/token
+
 volumes:
   atlassian-oauth-negotiated-cache:
   relay-secret-storage:
+  cloudflared-token-storage:
 
