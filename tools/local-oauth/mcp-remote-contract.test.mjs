@@ -40,17 +40,22 @@ test('new negotiated-scope cache is separate from failed Bridge and existing Cha
 });
 
 
-test('localhost relay container shares only the new OAuth cache, uses file-backed bearer and loopback listener',()=>{
+test('localhost relay container shares only the new OAuth cache, uses userns-safe staged bearer and loopback listener',()=>{
   assert.match(compose,/profiles: \[relay\]/);
   assert.match(compose,/entrypoint: \["node", "\/opt\/mcp-relay\/server\.mjs"\]/);
   assert.doesNotMatch(compose,/\.\.\/local-relay\/server\.mjs:\/opt\/mcp-relay\/server\.mjs/);
   assert.match(image,/COPY --chown=node:node tools\/local-relay\/server\.mjs \/opt\/mcp-relay\/server\.mjs/);
   assert.match(image,/RUN chmod 0444 \/opt\/mcp-relay\/server\.mjs/);
   assert.match(image,/install -d -m 0755 -o node -g node \/opt\/mcp-relay/);
-  assert.match(compose,/RELAY_SECRET_FILE: \/run\/secrets\/relay_auth_token/);
+  assert.match(compose,/RELAY_SECRET_FILE: \/run\/relay-secrets\/token/);
   assert.match(compose,/source: \.\/\.relay-token/);
-  assert.match(compose,/target: \/run\/secrets\/relay_auth_token/);
-  assert.match(compose,/read_only: true\n\s+bind:\n\s+create_host_path: false/);
+  assert.match(compose,/target: \/run\/bootstrap\/relay-token/);
+  assert.match(compose,/source: relay-secret-storage\n\s+target: \/run\/relay-secrets\n\s+read_only: true/);
+  assert.match(compose,/relay-secret-init:\n\s+condition: service_completed_successfully/);
+  assert.match(compose,/network_mode: none/);
+  assert.match(compose,/cap_add: \[CHOWN\]/);
+  assert.match(compose,/install -o 1000 -g 1000 -m 0400/);
+  assert.match(compose,/RELAY_SECRET_STAGED_FOR_NODE/);
   assert.doesNotMatch(compose,/^\s+secrets:/m);
   assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);
   assert.doesNotMatch(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth/);

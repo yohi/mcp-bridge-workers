@@ -36,8 +36,47 @@ services:
 
   # Run only after mcp-remote-client OAuth has populated the separate auth cache.
   # Local listener is bound to loopback; cloudflared on this host publishes it.
+  # Files bind-mounted into rootless/userns Docker can appear as uid=0 even
+  # when host owner is 1000. Stage the existing 0600 bearer into a private Docker
+  # named volume using a one-shot offline container; the relay stays non-root.
+  relay-secret-init:
+    profiles: [relay]
+    image: mcp-bridge-atlassian-auth:0.14.3
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ./.relay-token
+        target: /run/bootstrap/relay-token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: relay-secret-storage
+        target: /run/relay-secrets
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        set -eu
+        test -r /run/bootstrap/relay-token
+        test -f /run/bootstrap/relay-token
+        trap 'rm -f /run/relay-secrets/.token-next' EXIT
+        install -o 1000 -g 1000 -m 0400 /run/bootstrap/relay-token /run/relay-secrets/.token-next
+        mv -f /run/relay-secrets/.token-next /run/relay-secrets/token
+        test "$(stat -c %u /run/relay-secrets/token)" = 1000
+        test "$(stat -c %a /run/relay-secrets/token)" = 400
+        echo RELAY_SECRET_STAGED_FOR_NODE
+
   relay:
     profiles: [relay]
+    depends_on:
+      relay-secret-init:
+        condition: service_completed_successfully
     build:
       context: ../..
       dockerfile: tools/local-oauth/Dockerfile.mcp-remote
@@ -53,19 +92,18 @@ services:
       - /tmp:rw,nosuid,nodev,size=32m
     volumes:
       - atlassian-oauth-negotiated-cache:/home/node/.mcp-auth
-      # File-backed Compose secrets cannot remap uid/gid; direct read-only bind
-      # preserves the host file owner (0600, expected Linux UID 1000=node).
-      - type: bind
-        source: ./.relay-token
-        target: /run/secrets/relay_auth_token
+      # Secret is staged by an offline, one-shot container, and remains
+      # readable by the non-root node UID despite userns/rootless bind mapping.
+      - type: volume
+        source: relay-secret-storage
+        target: /run/relay-secrets
         read_only: true
-        bind:
-          create_host_path: false
     environment:
       MCP_REMOTE_CONFIG_DIR: /home/node/.mcp-auth
-      RELAY_SECRET_FILE: /run/secrets/relay_auth_token
+      RELAY_SECRET_FILE: /run/relay-secrets/token
     entrypoint: ["node", "/opt/mcp-relay/server.mjs"]
 
 volumes:
   atlassian-oauth-negotiated-cache:
+  relay-secret-storage:
 

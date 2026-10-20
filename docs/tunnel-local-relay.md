@@ -112,3 +112,23 @@ curl -i http://127.0.0.1:18787/health
 ```
 
 If this returns another `Restarting`, inspect `logs --tail=30 relay`. If you see `MCP_RELAY_STARTUP_FAILED: secret_not_readable`, the *separate* bearer file is still not readable; check its host UID and the container's effective UID, without changing its mode or revealing its contents. Avoid `docker compose down -v` because it would remove the successful OAuth volume.
+
+## Fix: rootless Docker UID mapping of bind-mounted bearer (2026-10-20)
+
+Host and container diagnostics showed **host `.relay-token` UID=1000, GID=1000, mode=0600** but **container UID=0, GID=0, mode=0600** while the relay process ran as UID=1000. The direct read-only bind therefore remains unreadable to `node`; merely matching host UID to container UID was an incorrect assumption. Do **not** change the host mode to 0644, change the relay to a privileged/root process, or regenerate the bearer.
+
+The revised Compose defines a one-shot **`relay-secret-init`**, with `network_mode: none`, a read-only bind of the existing host token, only `CHOWN` capability, and no logging of token bytes. The init copies the token into an isolated Docker **`relay-secret-storage`** named volume, owned by container UID 1000 and mode 0400. The normal relay mounts this Docker volume **read-only** and continues running as non-root with all capabilities dropped. This creates a **second local at-rest copy in Docker's private volume**; it is not uploaded to Cloudflare, but restrict Docker host/volume access and exclude it from backups. `docker compose down -v` would destroy this and the existing OAuth volume; do not run it.
+
+**Operator retry (no new token, no OAuth):**
+
+```bash
+cd ~/program/private/mcp-bridge-workers
+git pull
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml \
+  --profile relay up -d --force-recreate relay
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml \
+  --profile relay ps -a
+curl -i http://127.0.0.1:18787/health
+```
+
+`--build` is optional in this change; Compose, not the Docker image, contains the fix. If the one-shot helper fails, show `docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay ps -a` and the helper's **sanitized status/error codes**, not the bearer. On success, `relay-secret-init` should show `Exited (0)`, relay should show `Up`, and `/health` should return 200. If a custom rootless/userns Docker configuration does not allow `CHOWN`, report the failure rather than escalating the long-lived relay's privileges.
