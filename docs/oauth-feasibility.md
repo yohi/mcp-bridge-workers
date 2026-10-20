@@ -133,3 +133,29 @@ A matching callback alone cannot prove that Bitbucket tools are accessible. The 
 ## OpenCode DCR comparison (2026-10-20)
 
 The source-level comparison of DCR request metadata, response validation/storage, and the operator-observed authorization URLs is recorded in [OpenCode vs Bridge DCR comparison](atlassian-opencode-dcr-diff.md). OpenCode's provider metadata includes `client_uri=https://opencode.ai` and both `authorization_code` and `refresh_token` grant types; the Bridge omits `client_uri` and currently registers only `authorization_code`. Actual OpenCode DCR HTTP POST bytes and either app's full returned registration response are **NOT AVAILABLE**. These differences are not yet proven to cause the consent-time `invalid_request`. No runtime or auth flow change was made as part of this comparison.
+
+## Confirmed second consent failure after prompt experiment (2026-10-20 JST)
+
+The operator explicitly confirmed a **second** attempt, using Bridge with \`prompt=consent\`, displayed the Atlassian consent screen. **After clicking Accept**, Atlassian again showed:
+
+\`\`\`text
+invalid_request
+Incorrect request parameters
+\`\`\`
+
+The local probe printed:
+
+\`\`\`text
+V2_DCR_PUBLIC_CLIENT_SECRET_IGNORED
+V2_DCR_ACCEPTED: public client and exact callback verified.
+V2_LOCALHOST_NOT_CONFIRMED: no callback before timeout.
+TOKEN_EXCHANGE_NOT_TESTED; WORKER_HANDOFF_NOT_IMPLEMENTED.
+\`\`\`
+
+The operator redacted the \`client_id\` and PKCE parameters from the URL they shared; **this redaction is not evidence those fields were absent from the actual request**. The current \`makeAuthorizationUrl\` inserts \`client_id\`, \`code_challenge\`, and \`code_challenge_method=S256\`. The user confirmed \`invalid_request\` occurred immediately after Accept, not merely a silent localhost timeout. The authorization server did not complete authorization; local callback timed out as a downstream consequence.
+
+**Result of controlled experiment:** Adding \`prompt=consent\` did **not** solve the consent-time error. Do not characterize prompt as a required fix. DCR response validation passed; \`client_secret\` with \`token_endpoint_auth_method=none\` is compatible with the separately successful \`mcp-remote\` observation.
+
+**Do not rerun identical probes**: each one creates a fresh DCR client. The next recommended work is offline comparison of the actual v2 DCR request semantics with the working \`mcp-remote@0.14.3\` (registration grants, effective scope derivation, and issuer consistency). Neither the missing \`refresh_token\` grant nor the narrow Bitbucket Read scope has been proven causal; do not introduce write/delete/manage scopes. If the registration metadata checks out, the Atlassian Developer Community report [#103197](https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197) recommends providing a prior error reference ID and timestamp **privately** to Atlassian support. An independently reported similar result is not evidence of an Atlassian product fault.
+
+**Gates remain:** CONSENT=FAILED; CALLBACK=NOT_PROVEN; TOKEN_EXCHANGE=NOT_TESTED; WORKER_HANDOFF=NOT_IMPLEMENTED. No DCR POST, login, or token transfer was executed by the assistant in producing this record.
