@@ -1,33 +1,30 @@
-# Atlassian Rovo MCP v2 compatibility
+# Atlassian Rovo MCP v2 / Bitbucket contract
 
-## Version policy (2026-10-20)
+The MCP upstream MUST remain \`https://mcp.atlassian.com/v2/mcp\`.
 
-**MCP upstream MUST use v2:** `https://mcp.atlassian.com/v2/mcp`.
+**v2 MCP is not the same as the v1 OAuth authorization server.** The original proof-of-concept inadvertently read root metadata from \`mcp.atlassian.com\`, then used \`/v1/authorize\`, \`/v1/token\`, and \`/v1/register\`. These paths are **not valid evidence of v2 OAuth readiness**. PR #2 now requires v2 protected-resource discovery, an Atlassian Identity issuer, and v2 resource binding. It will fail closed instead of falling back.
 
-Atlassian announced Rovo MCP v2 general availability on **2026-09-08**, adding Bitbucket, Loom, and other products. The v1 toolset is not the right baseline for Bitbucket. Do not change the upstream URL to `/v1/mcp` or `/v1/mcp/authv2`; preserve `/v2/mcp` as a regression-tested contract.
+The correct discovery sequence:
+\`\`\`text
+mcp.atlassian.com/v2/mcp
+  -> mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp
+  -> auth.atlassian.com/<discovered-issuer>/.well-known/oauth-authorization-server
+  -> auth.atlassian.com/authorize
+  -> auth.atlassian.com/oauth/token
+  -> auth.atlassian.com/<discovered-issuer>/dcr/register
+\`\`\`
 
-**Important distinction:** `https://mcp.atlassian.com/v1/register` is the OAuth **Dynamic Client Registration endpoint advertised by the authorization server**. It is not the MCP transport endpoint and does **not** mean the bridge is using Rovo MCP v1. OAuth endpoints must be discovered and verified independently from the MCP URL; do not mechanically change `v1/register` to `v2/register`.
+The metadata check uses RFC 8414 path-insertion and issuer-scoped well-known discovery locations, validates the returned issuer and endpoints, and requires \`read:bitbucket:agent-interface\` to be advertised by the protected resource before browser experimentation. Do not assume that scope advertisement means an individual has access.
 
-## Bitbucket prerequisites
+Bitbucket v2 requirements:
+- Workspace linked to an Atlassian organization;
+- \`read:bitbucket:agent-interface\` and corresponding permissions for read operations; \`write:bitbucket:agent-interface\` only when intentionally authorized;
+- Actual end-to-end runtime proof of granted scopes and available tools.
 
-- The Bitbucket Cloud workspace must be linked to an Atlassian organization.
-- The Rovo MCP tool catalog includes `read_bitbucket` and `write_bitbucket` permission groups. Current v2 documentation lists OAuth 2.1 and API token options for both; required scopes are `read:bitbucket:agent-interface` and `write:bitbucket:agent-interface` respectively.
-- Actual tool availability depends on the user's permissions, granted scopes, organization policy, and server tool discovery. Authentication success by itself is insufficient to prove Bitbucket access.
-- The bridge PoC permits `discover` and `executeRead`, but this is **not a verified per-tool read-only control**. For production, implement scoped enforcement and verify the nested deferred tool ID and operation before forwarding.
-- The upstream `tools/list` response is currently not filtered to match the bridge allowlist. Do not present this PoC as secure multi-tool gateway.
+The existing relay's \`executeRead\` allowlist does not enforce deferred nested operation IDs; its \`tools/list\` still may advertise tools that will be blocked. This remains experimental.
 
-## Verify without authentication
-
-```sh
-npm test
-npm run check:atlassian-oauth
-```
-
-These checks verify source configuration and publicly advertised authorization metadata only. They do not prove any tenant's Bitbucket availability.
-
-## Sources
-
-- https://developer.atlassian.com/changelog/ (2026-09-08 v2 GA announcement)
+Sources:
+- https://www.atlassian.com/blog/bitbucket/connect-bitbucket-cloud-to-your-ai-tools-with-atlassian-mcp
 - https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/
-- https://jira.atlassian.com/browse/BCLOUD-24072 (v2 Bitbucket OAuth support)
-- https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/
+- https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-oauth-2-1/
+- https://www.truefoundry.com/docs/ai-gateway/mcp/atlassian-rovo-mcp-server

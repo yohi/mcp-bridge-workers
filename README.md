@@ -10,24 +10,24 @@ ChatGPT / OpenCode --> Cloudflare MCP Portal --> Worker (per provider)
 ## Structure
 
 - \`packages/core\` — shared MCP relay transport and request checks
-- \`workers/atlassian\` — first provider adapter: Atlassian Rovo MCP
-- \`tools/local-oauth\` — OAuth metadata check and opt-in loopback callback feasibility probe
-- \`docs\` — architecture, security and OAuth verification protocol
+- \`workers/atlassian\` — Atlassian Rovo MCP v2 adapter
+- \`tools/local-oauth\` — **v2-only** OAuth metadata discovery and opt-in loopback callback test
+- \`docs\` — architecture, security and OAuth feasibility protocol
 
 ## Validate locally (Node.js >=20)
 
-\`\`\`bash
+\`\`\`sh
 npm install
 npm test
-npm run check:atlassian-oauth  # optional public network read; no registration
+npm run check:atlassian-oauth
 \`\`\`
 
-**OAuth feasibility:** see [docs/oauth-feasibility.md](docs/oauth-feasibility.md). DCR client registration is only attempted by the separate \`npm run probe:atlassian-localhost\` command, which requires organization approval and local browser access. It never exchanges, stores, or forwards tokens.
+This metadata check performs unauthenticated GETs against the **v2 protected-resource metadata**, then its advertised tenant-scoped Atlassian Identity authorization server. It will not fall back to \`mcp.atlassian.com/v1/authorize\`.
+
+**OAuth feasibility:** read [docs/oauth-feasibility.md](docs/oauth-feasibility.md). The optional \`npm run probe:atlassian-localhost\` sends a DCR registration POST only when explicitly run on an authorized local machine. It never exchanges, stores or forwards tokens.
 
 Never commit credentials or secrets. The Worker requires two independent secrets: \`PORTAL_BEARER_TOKEN\` for Portal-to-Worker traffic, and \`UPSTREAM_AUTHORIZATION\` for the upstream Rovo MCP endpoint. Neither is configured by this repository or CI.
 
-## Deployment (NOT performed; review first)
+## Deployment (NOT performed)
 
-A dedicated Worker can be deployed via \`npm run deploy:atlassian\` after review. Restrict the MCP Portal mapping to **one user**. This version neither refreshes upstream credentials nor implements safe localhost OAuth token handoff.
-
-Read [architecture](docs/architecture.md), [security gates](docs/security.md), and [OAuth feasibility](docs/oauth-feasibility.md) before any deployment. Live Atlassian integration and production use are out of scope for this PoC.
+The Worker may be deployed with \`npm run deploy:atlassian\` only after review. Restrict the MCP Portal mapping to **one user**. This PoC neither refreshes upstream credentials nor implements localhost OAuth token handoff. Read [security](docs/security.md) and [v2 compatibility](docs/atlassian-v2-compatibility.md) before any deployment.

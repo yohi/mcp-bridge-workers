@@ -1,20 +1,22 @@
 import {randomBytes, createHash} from 'node:crypto';
-import {RESOURCE, ISSUER} from './discovery.mjs';
+import {RESOURCE, AUTH_ORIGIN, BITBUCKET_READ_SCOPE} from './discovery.mjs';
 
 export function makeOAuthChallenge() {
   const verifier = randomBytes(32).toString('base64url');
   return {
     verifier,
-    challenge: createHash('sha256').update(verifier, 'ascii').digest('base64url'),
+    challenge: createHash('sha256').update(verifier,'ascii').digest('base64url'),
     state: randomBytes(24).toString('base64url'),
   };
 }
 
-export function makeAuthorizationUrl({endpoint, clientId, redirectUri, challenge, state}) {
-  const endpointUrl = new URL(endpoint);
-  if (endpointUrl.origin !== ISSUER || endpointUrl.protocol !== 'https:' ||
+export function makeAuthorizationUrl({endpoint, clientId, redirectUri, challenge, state, scopes}) {
+  const u = new URL(endpoint);
+  if (u.origin !== AUTH_ORIGIN || u.pathname !== '/authorize' ||
       !clientId || !challenge || !state ||
-      !/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/callback$/.test(redirectUri)) {
+      !/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/callback$/.test(redirectUri) ||
+      !Array.isArray(scopes) || !scopes.includes(BITBUCKET_READ_SCOPE) ||
+      scopes.some(s => typeof s !== 'string' || !/^[a-z0-9:._-]+$/.test(s))) {
     throw new Error('unsafe_authorization_parameters');
   }
   const url = new URL(endpoint);
@@ -24,13 +26,14 @@ export function makeAuthorizationUrl({endpoint, clientId, redirectUri, challenge
   url.searchParams.set('code_challenge_method','S256');
   url.searchParams.set('code_challenge',challenge);
   url.searchParams.set('state',state);
+  url.searchParams.set('scope',scopes.join(' '));
   url.searchParams.set('resource',RESOURCE);
   return url.toString();
 }
 
 /** Never return, log or store the authorization code. */
 export function classifyCallback(callbackUrl, expectedState) {
-  const url = new URL(callbackUrl, 'http://127.0.0.1');
+  const url = new URL(callbackUrl,'http://127.0.0.1');
   if (url.pathname !== '/callback' || url.searchParams.get('state') !== expectedState) {
     return 'invalid_callback';
   }

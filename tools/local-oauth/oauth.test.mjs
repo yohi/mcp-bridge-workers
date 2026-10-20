@@ -1,106 +1,125 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {inspectDiscovery,AS_METADATA,ISSUER,RESOURCE_METADATA} from './discovery.mjs';
+import {
+  inspectDiscovery,RESOURCE,RESOURCE_METADATA_URL,AUTH_ORIGIN,
+  BITBUCKET_READ_SCOPE,authorizationMetadataCandidates
+} from './discovery.mjs';
 import {makeOAuthChallenge,makeAuthorizationUrl,classifyCallback} from './probe-core.mjs';
 
+const issuer = AUTH_ORIGIN + '/test-authority';
 const metadata = {
-  issuer:ISSUER,
-  authorization_endpoint:ISSUER+'/v1/authorize',
-  token_endpoint:ISSUER+'/v1/token',
-  registration_endpoint:ISSUER+'/v1/register',
+  issuer,authorization_endpoint: AUTH_ORIGIN + '/authorize',
+  token_endpoint: AUTH_ORIGIN + '/oauth/token',
+  registration_endpoint: issuer + '/dcr/register',
   response_types_supported:['code'],
   grant_types_supported:['authorization_code','refresh_token'],
   code_challenge_methods_supported:['S256'],
 };
-function mockFetch(responses) {
+const resource = {
+  resource: RESOURCE,
+  authorization_servers: [issuer],
+  scopes_supported: [BITBUCKET_READ_SCOPE,'read:me'],
+};
+const asUrl = authorizationMetadataCandidates(issuer)[0];
+function fakeFetcher(responseDocs) {
   const calls=[];
   const get=async (url,options)=>{
     calls.push({url,options});
-    if (!(url in responses)) return new Response('',{status:404});
-    const found=responses[url];
-    return found instanceof Response?found:
-      new Response(JSON.stringify(found),{headers:{'content-type':'application/json'}});
+    if (!(url in responseDocs)) return new Response('',{status:404});
+    const data = responseDocs[url];
+    return data instanceof Response ? data :
+      new Response(JSON.stringify(data),{headers:{'content-type':'application/json'}});
   };
   return {get,calls};
 }
-test('root authorization-server metadata is sufficient when protected metadata is missing',async()=>{
-  const {get,calls}=mockFetch({[AS_METADATA]:metadata});
-  const r=await inspectDiscovery(get);
-  assert.equal(r.result,'metadata_verified');
-  assert.equal(r.resource_metadata,'not_confirmed');
-  assert.equal(r.dcr,'advertised_only');
-  assert.equal(r.pkce_s256,'advertised_only');
-  assert.equal(r.localhost_redirect,'not_tested');
-  assert.equal(r.worker_handoff,'not_implemented');
-  assert.ok(calls.every(c=>c.options.method==='GET' && c.options.redirect==='error'));
-  assert.ok(calls.every(c=>!c.options.headers.authorization));
+test('v2 protected resource metadata selects tenant-scoped Atlassian Identity issuer',async()=>{
+  const {get,calls}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[asUrl]:metadata});
+  const result=await inspectDiscovery(get);
+  assert.equal(result.result,'metadata_verified');
+  assert.equal(result.issuer,issuer);
+  assert.equal(result.authorization_endpoint,AUTH_ORIGIN+'/authorize');
+  assert.equal(result.dcr,'advertised_only');
+  assert.equal(result.bitbucket_read_scope,'advertised_only');
+  assert.equal(result.localhost_redirect,'not_tested');
+  assert.ok(calls.every(x=>x.options.method==='GET' && x.options.redirect==='error'));
+  assert.ok(!calls.some(x=>x.url.includes('mcp.atlassian.com/v1') ||
+                           x.url === 'https://mcp.atlassian.com/.well-known/oauth-authorization-server'));
 });
-test('resource discovery is independently reported',async()=>{
-  const {get}=mockFetch({
-    [AS_METADATA]:metadata,
-    [RESOURCE_METADATA[0]]:{resource:'https://mcp.atlassian.com/v2/mcp',authorization_servers:[ISSUER]},
-  });
-  assert.equal((await inspectDiscovery(get)).resource_metadata,'confirmed');
-});
-test('root metadata missing means no DCR or redirect claims',async()=>{
-  const {get}=mockFetch({});
+test('cannot fall back to v1 root metadata if v2 PRM absent',async()=>{
+  const {get}=fakeFetcher({'https://mcp.atlassian.com/.well-known/oauth-authorization-server':metadata});
   const r=await inspectDiscovery(get);
   assert.equal(r.result,'not_proven');
-  assert.equal(r.localhost_redirect,'not_tested');
+  assert.equal(r.reason,'v2_resource_metadata_unavailable');
 });
-test('reject issuer mismatch',async()=>{
-  const {get}=mockFetch({[AS_METADATA]:{...metadata,issuer:'https://evil.example'}});
-  assert.equal((await inspectDiscovery(get)).result,'not_proven');
+test('rejects malicious protected-resource issuer',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:{...resource,authorization_servers:['https://evil.example/issuer']}});
+  const r=await inspectDiscovery(get);
+  assert.equal(r.result,'not_proven');
+  assert.equal(r.reason,'v2_authorization_server_invalid_or_ambiguous');
 });
-test('reject authorization endpoint on a different origin',async()=>{
-  const {get}=mockFetch({[AS_METADATA]:{...metadata,authorization_endpoint:'https://evil.example/callback'}});
-  assert.equal((await inspectDiscovery(get)).result,'not_proven');
-});
-test('do not advertise untrusted DCR endpoint',async()=>{
-  const {get}=mockFetch({[AS_METADATA]:{...metadata,registration_endpoint:'https://evil.example/register'}});
+test('rejects scope list without Bitbucket access',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:{...resource,scopes_supported:['read:me']},[asUrl]:metadata});
   const r=await inspectDiscovery(get);
   assert.equal(r.result,'metadata_verified');
-  assert.equal(r.dcr,'not_proven');
-  assert.equal(r.registration_endpoint,null);
+  assert.equal(r.bitbucket_read_scope,'not_proven');
 });
-test('reject redirected metadata fetch',async()=>{
-  const {get}=mockFetch({[AS_METADATA]:new Response('',{status:302,headers:{location:'https://evil.example'}})});
+test('rejects incorrect resource identifier',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:{...resource,resource:'https://mcp.atlassian.com/v1/mcp'},[asUrl]:metadata});
   assert.equal((await inspectDiscovery(get)).result,'not_proven');
 });
-test('S256 must be explicitly advertised',async()=>{
-  const {get}=mockFetch({[AS_METADATA]:{...metadata,code_challenge_methods_supported:['plain']}});
+test('rejects mismatched metadata issuer',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[asUrl]:{...metadata,issuer:AUTH_ORIGIN+'/other'}});
+  const r=await inspectDiscovery(get);
+  assert.equal(r.result,'not_proven');
+});
+test('rejects legacy authentication and registration endpoints',async()=>{
+  for(const key of ['authorization_endpoint','registration_endpoint','token_endpoint']){
+    const bad={...metadata,[key]:'https://mcp.atlassian.com/v1/authorize'};
+    const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[asUrl]:bad});
+    assert.equal((await inspectDiscovery(get)).result,'not_proven');
+  }
+});
+test('rejects endpoint URL redirection and unrelated host',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[asUrl]:new Response('',{status:302,headers:{location:'https://evil.example'}})});
+  assert.equal((await inspectDiscovery(get)).result,'not_proven');
+});
+test('fallback path for issuer-scoped metadata is supported without legacy issuer',async()=>{
+  const urls=authorizationMetadataCandidates(issuer);
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[urls[1]]:metadata});
+  assert.equal((await inspectDiscovery(get)).result,'metadata_verified');
+});
+test('requires PKCE S256 advertisement',async()=>{
+  const {get}=fakeFetcher({[RESOURCE_METADATA_URL]:resource,[asUrl]:{...metadata,code_challenge_methods_supported:['plain']}});
   assert.equal((await inspectDiscovery(get)).pkce_s256,'not_proven');
 });
-test('PKCE challenge and state are freshly generated',()=>{
-  const first=makeOAuthChallenge(), second=makeOAuthChallenge();
-  assert.notEqual(first.state,second.state);
-  assert.notEqual(first.verifier,second.verifier);
-  assert.match(first.challenge,/^[A-Za-z0-9_-]+$/);
+test('PKCE and state are fresh',()=>{
+  const a=makeOAuthChallenge(),b=makeOAuthChallenge();
+  assert.notEqual(a.state,b.state);assert.notEqual(a.verifier,b.verifier);
 });
-test('build loopback authorization URL without token or verifier',()=>{
-  const k=makeOAuthChallenge();
-  const u=new URL(makeAuthorizationUrl({endpoint:metadata.authorization_endpoint,
-    clientId:'test-client',redirectUri:'http://127.0.0.1:18080/callback',
-    challenge:k.challenge,state:k.state}));
+test('authorize URL pins v2 resource and Bitbucket read scope, not v1',()=>{
+  const a=makeOAuthChallenge();
+  const params={endpoint:metadata.authorization_endpoint,clientId:'test',
+    redirectUri:'http://127.0.0.1:18888/callback',challenge:a.challenge,
+    state:a.state,scopes:[BITBUCKET_READ_SCOPE]};
+  const u=new URL(makeAuthorizationUrl(params));
+  assert.equal(u.origin,AUTH_ORIGIN);
+  assert.equal(u.pathname,'/authorize');
+  assert.equal(u.searchParams.get('resource'),RESOURCE);
+  assert.equal(u.searchParams.get('scope'),BITBUCKET_READ_SCOPE);
   assert.equal(u.searchParams.get('code_challenge_method'),'S256');
-  assert.equal(u.searchParams.get('state'),k.state);
-  assert.ok(!u.toString().includes(k.verifier));
-  assert.ok(!u.searchParams.has('client_secret'));
+  assert.ok(!u.toString().includes(a.verifier));
 });
-test('reject non-loopback redirect and external authorize endpoint',()=>{
-  const k=makeOAuthChallenge();
-  const opt={endpoint:metadata.authorization_endpoint,clientId:'x',
-    challenge:k.challenge,state:k.state};
-  assert.throws(()=>makeAuthorizationUrl({...opt,redirectUri:'https://worker.example/callback'}));
-  assert.throws(()=>makeAuthorizationUrl({...opt,redirectUri:'http://localhost:80/callback'}));
-  assert.throws(()=>makeAuthorizationUrl({...opt,endpoint:'https://evil.example/auth',
-    redirectUri:'http://127.0.0.1:8080/callback'}));
+test('authorize URL rejects v1, missing Bitbucket scope and non-loopback',()=>{
+  const a=makeOAuthChallenge();
+  const params={endpoint:metadata.authorization_endpoint,clientId:'test',
+    redirectUri:'http://127.0.0.1:18888/callback',challenge:a.challenge,
+    state:a.state,scopes:[BITBUCKET_READ_SCOPE]};
+  assert.throws(()=>makeAuthorizationUrl({...params,endpoint:'https://mcp.atlassian.com/v1/authorize'}));
+  assert.throws(()=>makeAuthorizationUrl({...params,scopes:['read:me']}));
+  assert.throws(()=>makeAuthorizationUrl({...params,redirectUri:'https://workers.dev/callback'}));
 });
-test('callback never returns authorization code, and rejects state mismatch',()=>{
-  const status=classifyCallback('/callback?code=SUPERSECRET&state=known','known');
-  assert.equal(status,'callback_received');
-  assert.ok(!status.includes('SUPERSECRET'));
-  assert.equal(classifyCallback('/callback?code=SUPERSECRET&state=wrong','known'),'invalid_callback');
-  assert.equal(classifyCallback('/callback?error=access_denied&state=known','known'),'oauth_error');
-  assert.equal(classifyCallback('/other?code=x&state=known','known'),'invalid_callback');
+test('callback checks exact state and discards code',()=>{
+  assert.equal(classifyCallback('/callback?state=right&code=SECRET','right'),'callback_received');
+  assert.equal(classifyCallback('/callback?state=wrong&code=SECRET','right'),'invalid_callback');
+  assert.equal(classifyCallback('/callback?state=right&error=denied','right'),'oauth_error');
 });
