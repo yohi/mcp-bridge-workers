@@ -47,3 +47,8 @@ Atlassian may issue an unexpected `client_secret` for a public client with `toke
 ## Scope differential diagnosis (2026-10-20)
 
 User reported invalid_request after Accept in the new scoped mcp-remote integration. No success claim may be made based on CI. The dedicated scope metadata inspector only locally reads saved token fields in the already-working tunnel and prints allowlisted booleans/counts. It does not migrate, log or expose the tokens. Do not re-run OAuth registration or introduce extra permissions without new evidence and approval. See [offline scope check](mcp-remote-success-scope-check.md).
+
+
+## Successful-client requested vs granted scopes: operator evidence (2026-10-20)
+
+The read-only inspector on the now-logged-in existing tunnel returned 40 requested vs 21 granted scopes; the classification found no write/delete/manage prefixes in the **granted_scope field**. This is not a security proof that all mutation pathways are unavailable. The working client's observed granted scopes also include Jira/Confluence Read, identity scopes and offline_access, so copying the successful client's credentials or default scopes to Bridge would exceed its Bitbucket-only target. New live login experiments must require explicit authorization and an independently reviewed narrow scope set. Source [sanitized evidence](mcp-remote-success-scope-check.md#operator-verified-successful-scope-classification-2026-10-20-jst).

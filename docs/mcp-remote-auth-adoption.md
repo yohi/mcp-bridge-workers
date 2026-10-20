@@ -66,3 +66,8 @@ Even successful local OAuth **does not prove** Bitbucket Read-only enforcement f
 ## New operator-reported post-Accept failure (2026-10-20)
 
 The newly isolated, explicitly Bitbucket-Read-scoped mcp-remote@0.14.3 client also received invalid_request / Incorrect request parameters after Accept. The mere switch from bespoke DCR to mcp-remote is **not** a fix. There is no basis for turning on wider Jira/Confluence or write scopes. Do not re-run DCR/login yet. Instead use the [safe offline successful-token scope metadata inspection](mcp-remote-success-scope-check.md) to classify previously requested/granted scope features without printing any credentials. This uses the existing, separately successful chatgpt-mcp-tunnel OAuth cache; the Bridge never mounts or copies it.
+
+
+## Latest successful-tunnel scope evidence (2026-10-20)
+
+The owner re-authenticated the **existing** successful chatgpt-mcp-tunnel and ran the safe inspector against its local cached token. The successful registration has 40 **requested** and 21 **granted** scopes, including Bitbucket Read, Jira Read, Confluence Read, read:me, read:account and offline_access. The requested list contains write/delete/manage prefixed scopes; the granted list contains none of those prefixes. The Bridge-only Bitbucket Read scope is a **major difference, not a confirmed root cause**. Do **not** copy the 40-scope request, re-use the successful tunnel's token or assume 21 granted scopes are sufficient to enforce read-only deferred tools. See [evidence, limitations and explicit gate](mcp-remote-success-scope-check.md#operator-verified-successful-scope-classification-2026-10-20-jst).

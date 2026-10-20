@@ -51,3 +51,34 @@ Even a favorable comparison cannot prove that scope alone caused the post-consen
 Incident request UUID from the browser error page should be sent privately only if Atlassian support correlation later becomes necessary.
 
 Unit tests use synthetic token files and verify that secrets, raw scope names and cache filenames are absent from the output.
+
+
+## Operator-verified successful scope classification (2026-10-20 JST)
+
+After logging in again to the existing **chatgpt-mcp-tunnel** (not to mcp-bridge-workers), the owner reran the local read-only scope inspector. The invocation returned exactly one parsed token metadata record. Only the allowlisted output classifications were provided; **no token, raw OAuth URL, client ID, tenant ID, DCR POST or scope string** is held in this repository.
+
+| Scope dimension | Stored requested_scope | Stored granted_scope |
+| --- | --- | --- |
+| present | true | true |
+| scope_count | 40 | 21 |
+| read:me | true | true |
+| read:account | true | true |
+| offline_access | true | true |
+| read:bitbucket:agent-interface | true | true |
+| read:jira:agent-interface | true | true |
+| read:confluence:agent-interface | true | true |
+| Any scope with write:/delete:/manage: prefix | true | false |
+
+Local `npm test` also reported **51/51 PASS** after workspace dependencies were available. The inspector returned `persisted_scope_metadata_inspection` with `record_count=1`. The previous `no_token_records` observation is superseded **for the current inspected cache**; it had not proven a permanent problem with the older successful tunnel.
+
+**Interpretation and limits:**
+- The successful `mcp-remote@0.14.3` flow persisted **more than Bitbucket Read alone** as its effective requested and granted scopes. The failed Bridge (both custom DCR and isolated `mcp-remote`) explicitly requested Bitbucket Read alone.
+- `requested_scope` is the effective requested scope recorded by the client, not a raw capture of the actual browser authorization URL. `granted_scope` is the reported scope from the saved token response; it must not be confused with a security audit of all currently effective app permissions.
+- A false `contains_mutating_scopes` checks only `write:`, `delete:` and `manage:` prefixes. It **does not certify complete read-only safety** or block deferred tool writes.
+- **Not proven causal:** Missing `read:me`, `read:account`, `offline_access` could contribute to post-Accept rejection, but the working session also differs in DCR client registration, callback configuration and consented resource/app choices.
+- Atlassian's [OAuth 2.1 guide](https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-oauth-2-1/) says consent determines app/scope access, but does **not** establish that these three scope names are always required for a Bitbucket-only MCP login. The successful flow's broader scope request **must not** be copied wholesale.
+- `offline_access` commonly enables token refresh, which is distinct from proving that consent itself requires it; retaining refresh-token capability demands separate security review.
+
+**Next engineering step (offline first):** document a narrow, separately approved test candidate with only `read:bitbucket:agent-interface` plus identity-related baseline scopes (`read:me`, `read:account`), and separately assess whether `offline_access` is needed. Any live probe requires **one new DCR registration and human consent**, so it must be explicitly authorized and must not expand Jira/Confluence permissions or introduce write/delete/manage scopes. Do not run such a probe on the basis of this evidence alone. If consent fails again, stop and use private Atlassian error reference for escalation.
+
+**Gates:** Successful original tunnel = operator observed; successful *restricted Bridge client* = NOT PROVEN / previously failed; cause = UNKNOWN; Worker handoff and nested read-only authorization = NOT IMPLEMENTED; PR #2 = DRAFT.
