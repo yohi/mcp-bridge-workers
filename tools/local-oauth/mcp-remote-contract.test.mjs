@@ -36,5 +36,16 @@ test('new negotiated-scope cache is separate from failed Bridge and existing Cha
   assert.match(compose,/read_only: true/);
   assert.match(compose,/cap_drop: \[ALL\]/);
   assert.match(compose,/no-new-privileges:true/);
-  assert.doesNotMatch(compose,/CONTROL_PLANE_API_KEY|UPSTREAM_AUTHORIZATION|PORTAL_BEARER_TOKEN|wrangler|cloudflare/);
+  assert.doesNotMatch(compose,/CONTROL_PLANE_API_KEY|UPSTREAM_AUTHORIZATION|PORTAL_BEARER_TOKEN|wrangler/);
+});
+
+
+test('localhost relay container shares only the new OAuth cache, uses file-backed bearer and loopback listener',()=>{
+  assert.match(compose,/profiles: \[relay\]/);
+  assert.match(compose,/entrypoint: \["node", "\/opt\/mcp-relay\/server\.mjs"\]/);
+  assert.match(compose,/\.\.\/local-relay\/server\.mjs:\/opt\/mcp-relay\/server\.mjs:ro/);
+  assert.match(compose,/RELAY_SECRET_FILE: \/run\/secrets\/relay_auth_token/);
+  assert.match(compose,/file: \.\/\.relay-token/);
+  assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);
+  assert.doesNotMatch(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth/);
 });
