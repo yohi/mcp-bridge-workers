@@ -66,3 +66,9 @@ Note: current pinned OpenCode source does **not hardcode** `prompt=consent` in t
 - Prefer further offline comparison, or ask Atlassian privately to correlate the prior error reference ID and timestamp. Never put raw `client_id`, `client_secret`, `code`, `state`, `code_challenge` or raw auth URLs in a public PR.
 - If the owner explicitly authorizes a later single live retry, test **one variable at a time**, use only Bitbucket Read, and require actual `V2_LOCALHOST_CALLBACK_CONFIRMED` output before marking consent/callback proven.
 - Callback success still does not establish token exchange, token refresh, Bitbucket tool execution or safe Workers handoff. All remain **NOT PROVEN / NOT IMPLEMENTED**.
+
+## Successful mcp-remote cached registration: new operator evidence (2026-10-20)
+
+The working tunnel's read-only inspection found one client registration with `client_secret_present=true`, `token_endpoint_auth_method=none`, the expected Atlassian Identity issuer and an eligible loopback redirect. This is direct evidence that **a secret in the server's DCR response is not inherently incompatible with a public client**. The Bridge's current registration validator already allows and ignores an unused secret if the method is `none`.
+
+The cached registration response did **not** report `grant_types`, `scope`, `client_uri` or software metadata. This is not evidence those fields were omitted from the actual original DCR *request* by `mcp-remote@0.14.3`. Comparing the cached response with Bridge's request as though they were equivalent would be invalid. No new reason to increase Bridge's Bitbucket Read-only authorization scope has been established. See [operator sanitized response assessment](mcp-remote-dcr-inspection.md#operator-run-sanitized-result-2026-10-20-jst).

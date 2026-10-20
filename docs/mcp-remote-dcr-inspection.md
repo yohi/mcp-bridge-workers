@@ -33,3 +33,23 @@ node --test tools/local-oauth/inspect-mcp-remote-registration.test.mjs
 ~~~
 
 No actual DCR request, token exchange or Cloudflare Worker deployment has been performed. Bridge consent remains NOT PROVEN and the PR stays Draft until an authorized, successful localhost callback is observed.
+
+## Operator-run sanitized result (2026-10-20, JST)
+
+The owner ran the exact read-only Docker Compose inspector against the **previously successful** `yohi/chatgpt-mcp-tunnel` OAuth volume. Its output reported **one** persisted registration record with `record_parsed`. Only these already-sanitized classifications are preserved; no secrets, client ID values, raw redirect URLs, scope strings, registration responses, or tokens were submitted.
+
+| Observed field | Value | Interpretation |
+| --- | --- | --- |
+| `client_id_present` | `true` | An actual non-URL client identifier was persisted |
+| `client_id_uses_metadata_document` | `false` | This is not a Client ID Metadata Document identifier |
+| `client_secret_present` | `true` | Atlassian-provided secret exists **even though** the method is `none` |
+| `issuer_is_atlassian_identity` | `true` | Persisted issuer matches the expected Identity host prefix |
+| `token_endpoint_auth_method` | `none` | **Successful precedent** for public-client mode alongside an unused secret |
+| `redirect_uris_reported`, `redirect_uri_count`, `redirect_all_loopback` | `true`, `1`, `true` | One loopback URI persisted |
+| `redirect_has_expected_callback_path` | `true` | Standard callback path seen |
+| `grants_reported`, `scope_reported` | `false`, `false` | **Unknown**, not disproved: persisted *response* does not disclose original DCR *request* |
+| `authorization_code_grant_reported`, `refresh_token_grant_reported` | `null`, `null` | Unknown; do not infer grants are absent or present |
+| `bitbucket_read_scope_reported`, `mutating_scopes_reported` | `null`, `null` | Unknown; does not justify adding elevated scopes |
+| `client_uri_field_present`, `software_id_field_present`, `software_version_field_present` | `false`, `false`, `false` | These were not present in the stored registration **response**, which says nothing about request inclusion |
+
+**Decision:** The earlier Bridge defect that rejected *any* `client_secret` was already corrected by `registration-result.mjs`: it now accepts a valid `none` public-client registration and never logs, uses or persists the secret. The success-side evidence supports keeping this behavior. It **does not** explain Bridge's separate post-consent `invalid_request` or prove current Bridge's OAuth grant succeeds. Do **not** add `refresh_token`, `client_uri`, `software_id`, extra permissions or change the client authentication method solely based on the absent cached fields. Keep PR #2 Draft. A single approved follow-up consent probe with only the already-staged `prompt=consent` change could discriminate one hypothesis; no retest or new registration occurred during this inspection.
