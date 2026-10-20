@@ -94,11 +94,17 @@ No successful `127.0.0.1` callback was reported. This outcome is **CONSENT_REJEC
 
 A separate developer reported the same post-consent error with `/v2/mcp`, OAuth 2.1 DCR, and an independent Python MCP SDK on 2026-10-09: https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197 . This raises an upstream compatibility hypothesis but **does not establish an Atlassian service defect** in our account.
 
+### Comparing OpenCode with Bridge (operator-provided, redacted)
+
+The **minimal controlled change** is adding `prompt=consent` to the Bridge's future authorization URLs while leaving its Bitbucket Read-only scope unchanged. **This is an unverified hypothesis, not an Atlassian-documented requirement.** Do **not** copy OpenCode's Write/Delete/Manage scopes. The loopback port/path differences are acceptable provided the exact redirect URI matches the registered client and the local listener is running.
+
+No additional OAuth registration or login has been executed by this patch. A live retest would register another client; do it once only after approval. Share only sanitized statuses.
+
 ### Investigation and safety constraints
 
 1. Do **not** repeat DCR client registration to retry identical consent flows. Each run creates a new client.
 2. On a future explicitly authorized test, inspect locally (never paste the full URL or request into PRs) that authorization has exactly one `client_id`, `redirect_uri`, `resource`, `scope`, `state`, `code_challenge`, `code_challenge_method`, and `response_type`; ensure the DCR response and authorize request refer to the same client and exact callback URI. Do not expose the values of `client_id`, `state`, `code_challenge` or authorization codes.
-3. The current implementation requests `scope=read:bitbucket:agent-interface` and `resource=https://mcp.atlassian.com/v2/mcp`. The generic Atlassian 3LO guide requires `audience=api.atlassian.com` for regular 3LO apps, **but this does not prove the Rovo MCP v2 DCR flow requires it**. Do not inject `audience`, `prompt`, extra scopes, or token-handling changes without a matching official profile or controlled compatibility evidence.
+3. The operator provided **redacted authorization URLs** for a working OpenCode flow and failing Bridge flow (2026-10-20). Both used `auth.atlassian.com/authorize`, PKCE S256, response type and `resource=https://mcp.atlassian.com/v2/mcp`. OpenCode supplied `prompt=consent` and a broad set of scopes (`read:me`, `read:account`, `offline_access`, Jira, Confluence, Bitbucket and more); the Bridge supplied only `read:bitbucket:agent-interface` and omitted `prompt`. The callback paths also differed. The specific cause of failure is still **UNKNOWN**. This PR adds **only** `prompt=consent` as a controlled compatibility hypothesis without broadening scopes. A similar Oct 9 report omitted `prompt` and received `invalid_request`, but this does not prove causation. The generic Atlassian 3LO guide requires `audience=api.atlassian.com` for regular 3LO apps; **that does not prove Rovo MCP v2 DCR requires it**, and OpenCode's working URL omitted `audience`. Do not inject `audience` or more scopes without separate evidence.
 4. If the generated parameters check out, take the UTC/JST timestamp, **private** Atlassian request/reference ID from the error page, client type (new v2 Identity DCR), resource and scope names, and the observed consent result to Atlassian developer support. Keep raw URLs, client credentials, site IDs, and correlation details out of the public repository.
 5. No Worker handoff or token exchange should be attempted until a correct callback and grant authorization are evidenced.
 

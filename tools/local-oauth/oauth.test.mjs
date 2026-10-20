@@ -107,6 +107,10 @@ test('authorize URL pins v2 resource and Bitbucket read scope, not v1',()=>{
   assert.equal(u.searchParams.get('resource'),RESOURCE);
   assert.equal(u.searchParams.get('scope'),BITBUCKET_READ_SCOPE);
   assert.equal(u.searchParams.get('code_challenge_method'),'S256');
+  assert.equal(u.searchParams.get('prompt'),'consent');
+  assert.equal(u.searchParams.getAll('prompt').length,1);
+  assert.deepEqual(u.searchParams.get('scope').split(' '),[BITBUCKET_READ_SCOPE]);
+  assert.equal(u.searchParams.has('audience'),false);
   assert.ok(!u.toString().includes(a.verifier));
 });
 test('authorize URL rejects v1, missing Bitbucket scope and non-loopback',()=>{

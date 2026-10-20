@@ -26,6 +26,9 @@ export function makeAuthorizationUrl({endpoint, clientId, redirectUri, challenge
   url.searchParams.set('code_challenge_method','S256');
   url.searchParams.set('code_challenge',challenge);
   url.searchParams.set('state',state);
+  // Controlled compatibility test: working OpenCode v2 flow sends this.
+  // Not proven required by Atlassian's Rovo MCP v2 OAuth profile.
+  url.searchParams.set('prompt','consent');
   url.searchParams.set('scope',scopes.join(' '));
   url.searchParams.set('resource',RESOURCE);
   return url.toString();
