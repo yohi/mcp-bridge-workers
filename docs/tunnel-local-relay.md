@@ -196,3 +196,11 @@ npm run tunnel:cloudflare-local:stop
 ```
 
 To rotate the connector token, stop the connector, update the existing local file through a trusted editor, restart with `docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel up -d --force-recreate cloudflared`; the one-shot initializer will stage the current file, and the connector will re-read it. **Do not** run `docker compose down -v`: that would delete the successful local Atlassian OAuth cache and both private Docker token volumes.
+
+## 2026-10-20: Worker `tools/list` allowlist alignment (code committed, deployment pending)
+
+The user observed `initialize`, `notifications/initialized` and `tools/list` succeed through the entire **Worker → Cloudflare Access → Docker Tunnel → Relay → Atlassian** path. The live upstream returned **14 tools**, including top-level write/destructive functions. This implementation update makes `tools/list` expose only the four existing top-level `tools/call`-permitted tool names: `atlassianUserInfo`, `getAccessibleAtlassianResources`, `discover`, `executeRead`. Tool pagination preserves `nextCursor` and filters each returned page. It fails closed rather than passing through unsupported SSE/malformed/oversized results. The local relay and OAuth cache are unchanged.
+
+**Deploy is a separate, explicit operator step.** After the PR branch passes CI and the owner authorizes a Worker deployment, run `git pull`, `npm test`, `npm run deploy:atlassian` on the intended host/account and re-run Worker `tools/list`. Expect exactly four visible tool names, not 14. No secrets or Cloudflare resources are modified by this code commit.
+
+**Important:** `discover` and `executeRead` remain available. Their nested operation semantics have not been independently proved read-only, and a hidden tool is not proof of least-privilege OAuth scopes. Keep PR Draft / Portal onboarding gated on live verification and a separate decision about this residual risk.

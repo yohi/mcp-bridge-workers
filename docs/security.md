@@ -33,7 +33,6 @@
 - Historical Bridge DCR registration was observed successful; its custom Bitbucket-only consent failed twice after Accept. Scoped mcp-remote replacement not yet executed.
 - Token exchange, refresh, local-to-Worker handoff, rotation and encrypted D1 store.
 - Read-only enforcement of deferred nested `executeRead` operations; naming is not authorization.
-- `tools/list` filtering; a caller may see blocked tools.
 - Per-user identity mapping: shared upstream credential would give every Portal caller one Atlassian identity. **Single-user prototype only**.
 - Real MCP Portal / Worker / Rovo MCP interoperability, Workers Free CPU usage.
 
@@ -66,3 +65,10 @@ The Worker now supports `local_relay` mode, explicitly selected in the deployabl
 ## Docker-only cloudflared connector (optional, staged)
 
 The `tunnel` Compose profile uses the official, version-pinned `cloudflare/cloudflared:2026.10.1` image with `--token-file` (Cloudflare supports this flag since 2025.4.0), never a token in process arguments or environment variables. The token is stored in a Git-ignored 0600 host file then staged by an **offline one-shot helper** into a separate 0400, UID-1000 private volume. The connector reads that volume read-only and runs as nonroot, read-only root filesystem, with dropped caps and no Docker socket. Host networking is needed for the loopback-only relay but **reduces container network isolation**. Secure the hostname with Cloudflare Access Service Auth **before** adding a public route. Do not mistake the Tunnel connector token for the Access Service Token or Portal bearer. The Linux host retains local copies of the connector token; Docker admins/backups may access them. Neither the Tunnel nor Cloudflare Access or Worker have been configured by this commit. [Runbook](tunnel-local-relay.md#docker-only-cloudflare-tunnel-connector-opt-in-2026-10-20).
+
+## Worker tools/list filter — proposal implemented on PR #2 (not deployed at this commit)
+
+- The upstream Atlassian MCP endpoint returned 14 tool definitions in the operator's successful live `tools/list` test, including `executeWrite` and `executeDestructive`. The existing Worker only authorizes top-level `tools/call` names `atlassianUserInfo`, `getAccessibleAtlassianResources`, `discover` and `executeRead`. Earlier runtime displayed all 14 names.
+- This correction applies the **same allowlist** to the returned `tools/list` JSON-RPC response, keeping allowed tool definitions and `nextCursor` intact for each page, and preserving existing `tools/call` rejection. A missing/unexpected/non-JSON/SSE/oversized tools-list body causes a **502 fail-closed** response, never an unfiltered passthrough. Ordinary `initialize` and notification responses remain unchanged.
+- Tests use synthetic upstream lists to prove blocked tool names are absent and blocked `tools/call` methods never reach the upstream even in `local_relay` mode. The filter must still be **deployed and observed against the real Atlassian endpoint** before the Portal is registered.
+- **Residual limitation — NOT PROVEN READ-ONLY:** `discover` can advertise operations of multiple risk tiers; `executeRead` forwards arbitrary discovered operation names and inputs without the Worker independently enforcing their resource-level semantics. The upstream's designation as `Read` and granted OAuth scopes cannot, on their own, establish every nested operation as side-effect free. This change blocks top-level write/destructive tools but does **not** impose a nested-operation allowlist, revoke write-capable OAuth scopes, or prove read-only operation. Defer any stronger safety claim until the actual `discover`/`executeRead` contract and scope constraints are independently verified.

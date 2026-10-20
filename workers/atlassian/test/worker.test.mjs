@@ -61,14 +61,20 @@ test('forwards initialize to fixed origin and replaces authorization', async () 
     assert.equal(r.headers.get('set-cookie'),null);
   });
 });
-test('allowed tool relayed; write and unknown tool names blocked', async () => {
-  await withFetch(async () => new Response('ok',{headers:{'content-type':'application/json'}}),async () => {
+test('allowed tool relayed; write and unknown tool names blocked before upstream', async () => {
+  let forwarded=0;
+  await withFetch(async () => {
+    forwarded++;
+    return new Response('ok',{headers:{'content-type':'application/json'}});
+  },async () => {
     const allowed = await worker.fetch(request('POST',call('tools/call',{name:'executeRead'}),auth),env);
     assert.equal(allowed.status,200);
     for (const name of ['executeWrite','executeDestructive','unknown']) {
       const denied = await worker.fetch(request('POST',call('tools/call',{name}),auth),env);
       assert.equal(denied.status,403);
+      assert.equal((await denied.json()).error.code,-32001);
     }
+    assert.equal(forwarded,1);
   });
 });
 test('rejects invalid JSON-RPC payloads and unsupported methods', async () => {
@@ -197,6 +203,99 @@ test('relay mode fails closed on missing or invalid credentials and URLs',async(
    ]){
      const r=await worker.fetch(request('POST',call('initialize'),auth),{...b,...changes});
      assert.equal(r.status,503);
+   }
+ });
+});
+
+test('tools/list exposes only the four allowed tools and retains schema and cursor',async()=>{
+  const upstreamTools=[
+    {name:'atlassianUserInfo',description:'identity',inputSchema:{type:'object',properties:{}}},
+    {name:'getAccessibleAtlassianResources',description:'sites',inputSchema:{type:'object'}},
+    {name:'discover',description:'discovery',inputSchema:{type:'object'}},
+    {name:'executeRead',description:'read',inputSchema:{type:'object'}},
+    {name:'executeWrite',description:'write',inputSchema:{type:'object'}},
+    {name:'executeDestructive',description:'delete',inputSchema:{type:'object'}},
+    {name:'searchJiraIssuesUsingJql',description:'primary search'},
+    {name:'anotherNewWriteTool'},
+  ];
+  await withFetch(async (_,opts)=>{
+    assert.equal(JSON.parse(new TextDecoder().decode(opts.body)).method,'tools/list');
+    return new Response(JSON.stringify({
+      jsonrpc:'2.0',id:7,result:{tools:upstreamTools,nextCursor:'next-page'},
+    }),{headers:{'content-type':'application/json; charset=utf-8',
+      'mcp-session-id':'session-1','set-cookie':'secret-cookie'}});
+  },async()=>{
+    const r=await worker.fetch(request('POST',call('tools/list',{},7),auth),env);
+    assert.equal(r.status,200);
+    assert.equal(r.headers.get('mcp-session-id'),'session-1');
+    assert.equal(r.headers.get('set-cookie'),null);
+    assert.equal(r.headers.get('content-length'),null);
+    const payload=await r.json();
+    assert.equal(payload.id,7);
+    assert.equal(payload.result.nextCursor,'next-page');
+    assert.deepEqual(payload.result.tools.map(t=>t.name),
+      ['atlassianUserInfo','getAccessibleAtlassianResources','discover','executeRead']);
+    assert.deepEqual(payload.result.tools[0],upstreamTools[0]);
+    assert.ok(!JSON.stringify(payload).includes('executeWrite'));
+    assert.ok(!JSON.stringify(payload).includes('executeDestructive'));
+  });
+});
+
+test('tools/list pagination still filters all subsequent pages',async()=>{
+  let page=0;
+  await withFetch(async(_,opts)=>{
+    const rpc=JSON.parse(new TextDecoder().decode(opts.body));
+    assert.equal(rpc.method,'tools/list');
+    if(page++===0){
+      return Response.json({jsonrpc:'2.0',id:rpc.id,result:{tools:[{name:'executeWrite'}],
+        nextCursor:'page-2'}});
+    }
+    assert.deepEqual(rpc.params,{cursor:'page-2'});
+    return Response.json({jsonrpc:'2.0',id:rpc.id,result:{tools:[
+      {name:'executeDestructive'},{name:'executeRead'}]}});
+  },async()=>{
+    const first=await worker.fetch(request('POST',call('tools/list',{},9),auth),env);
+    assert.deepEqual((await first.json()).result,{tools:[],nextCursor:'page-2'});
+    const next=await worker.fetch(request('POST',call('tools/list',{cursor:'page-2'},10),auth),env);
+    assert.deepEqual((await next.json()).result,{tools:[{name:'executeRead'}]});
+    assert.equal(page,2);
+  });
+});
+
+test('tools/list never exposes unfiltered SSE, malformed or oversized upstream bodies',async()=>{
+  const unsafe=[
+    {payload:'event: message\\ndata: {"name":"executeDestructive"}\\n\\n',
+      type:'text/event-stream'},
+    {payload:'{invalid',type:'application/json'},
+    {payload:JSON.stringify({jsonrpc:'2.0',id:1,result:{notTools:[{name:'executeWrite'}]}}),
+      type:'application/json'},
+    {payload:'x'.repeat(2_097_153),type:'application/json'},
+  ];
+  for(const {payload,type} of unsafe){
+    await withFetch(async()=>new Response(payload,{headers:{'content-type':type}}),async()=>{
+      const r=await worker.fetch(request('POST',call('tools/list',{},1),auth),env);
+      assert.equal(r.status,502);
+      assert.equal(r.headers.get('content-type'),'application/json; charset=utf-8');
+      const text=await r.text();
+      assert.ok(!text.includes('executeWrite'));
+      assert.ok(!text.includes('executeDestructive'));
+      assert.ok(!text.includes('event:'));
+    });
+  }
+});
+
+test('write/destructive tools/call rejected before Access tunnel request',async()=>{
+ const relayEnv={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay',
+   LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/',
+   LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+   CF_ACCESS_CLIENT_ID:'test-service-id',
+   CF_ACCESS_CLIENT_SECRET:'c'.repeat(48),
+ };
+ await withFetch(()=>{throw Error('blocked tool reached upstream')},async()=>{
+   for(const name of ['executeWrite','executeDestructive','getJiraIssue']){
+     const r=await worker.fetch(request('POST',call('tools/call',{name}),auth),relayEnv);
+     assert.equal(r.status,403);
+     assert.equal((await r.json()).error.code,-32001);
    }
  });
 });

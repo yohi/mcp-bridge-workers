@@ -71,6 +71,74 @@ function getRoute(env,fixedUpstream) {
     access:{id:env.CF_ACCESS_CLIENT_ID,secret:env.CF_ACCESS_CLIENT_SECRET}};
 }
 
+
+const MAX_TOOL_LIST_RESPONSE_BYTES = 2_097_152;
+
+/**
+ * A tools/list response is a security boundary: never relay an unfiltered
+ * upstream response, including SSE, malformed JSON and oversized bodies.
+ * Keep pagination metadata intact; each tools/list page is filtered.
+ */
+async function filteredToolListResponse(response, allowedTools) {
+  const type = response.headers.get('content-type') ?? '';
+  if (response.status !== 200 || !/^application\/json(?:\s*;|$)/i.test(type)) {
+    await response.body?.cancel();
+    return json({error:'invalid_upstream_tool_list'},502);
+  }
+  const length = response.headers.get('content-length');
+  if (length !== null && Number.isFinite(Number(length)) &&
+      Number(length) > MAX_TOOL_LIST_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    return json({error:'upstream_tool_list_too_large'},502);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return json({error:'invalid_upstream_tool_list'},502);
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const {done,value} = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_TOOL_LIST_RESPONSE_BYTES) {
+        await reader.cancel();
+        return json({error:'upstream_tool_list_too_large'},502);
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return json({error:'invalid_upstream_tool_list'},502);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {bytes.set(chunk,offset);offset += chunk.byteLength;}
+  let body;
+  try {body = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}
+  catch {return json({error:'invalid_upstream_tool_list'},502);}
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      body.jsonrpc !== '2.0' ||
+      !(typeof body.id === 'number' || typeof body.id === 'string') ||
+      !body.result || typeof body.result !== 'object' ||
+      Array.isArray(body.result) || !Array.isArray(body.result.tools)) {
+    return json({error:'invalid_upstream_tool_list'},502);
+  }
+  const filtered = {
+    ...body, result: {...body.result,
+      tools: body.result.tools.filter(t =>
+        t !== null && typeof t === 'object' &&
+        typeof t.name === 'string' && allowedTools.has(t.name)),
+    },
+  };
+  const headers = new Headers({
+    'content-type':'application/json; charset=utf-8','cache-control':'no-store',
+  });
+  for (const name of ['mcp-session-id','mcp-protocol-version']) {
+    const value = response.headers.get(name);
+    if (value !== null) headers.set(name,value);
+  }
+  return new Response(JSON.stringify(filtered),{status:200,headers});
+}
+
 function upstreamCredentialValid(value) {
   return typeof value === 'string' && /^(Bearer|Basic) [^\r\n]{10,}$/.test(value);
 }
@@ -105,6 +173,7 @@ export function createMcpRelay(config) {
       if (!route) return json({error:'upstream_not_configured'},503);
 
       let requestBody;
+      let isToolList = false;
       if (request.method === 'POST') {
         if (!request.headers.get('content-type')?.toLowerCase().includes('application/json')) {
           return json({error:'unsupported_media_type'},415);
@@ -145,6 +214,7 @@ export function createMcpRelay(config) {
         if (payload.method === 'tools/call' && !tools.has(payload.params?.name)) {
           return rpcError(payload,'MCP tool is not on the allowlist');
         }
+        isToolList = payload.method === 'tools/list';
         requestBody = bytes;
       }
 
@@ -174,6 +244,8 @@ export function createMcpRelay(config) {
           await response.body?.cancel();
           return json({error:'unexpected_upstream_redirect'},502);
         }
+        // Filtering must happen before returning any bytes to the caller.
+        if (isToolList) return await filteredToolListResponse(response,tools);
         const responseHeaders = new Headers();
         for (const key of RESPONSE_HEADERS) {
           const value = response.headers.get(key);
