@@ -81,13 +81,34 @@ A response \`client_secret\` is treated as an unusual Atlassian-specific extra f
 
 **Do not run repeated DCR registration just to diagnose the prior client.** The original script did not persist a client ID; it cannot resume an abandoned registration. If a subsequent single fresh registration is authorized, the patched probe will classify it safely.
 
+## Consent failure observed (2026-10-20)
+
+The operator reached the **Atlassian Identity** OAuth consent UI for the Bitbucket workspace with a dynamically registered public client and requested read-only Bitbucket permission. After accepting, Atlassian displayed:
+
+```text
+error: invalid_request
+error_description: Incorrect request parameters
+```
+
+No successful `127.0.0.1` callback was reported. This outcome is **CONSENT_REJECTED_BY_AUTHORIZATION_SERVER** rather than a local server/network error; authorization codes and tokens were not verified. The exact registration metadata and generated authorization URL were not retained for offline comparison, so the failing parameter is still **UNKNOWN**.
+
+A separate developer reported the same post-consent error with `/v2/mcp`, OAuth 2.1 DCR, and an independent Python MCP SDK on 2026-10-09: https://community.developer.atlassian.com/t/rovo-mcp-oauth-returns-invalid-request-after-consent-reproduced-with-independent-python-mcp-sdk-client/103197 . This raises an upstream compatibility hypothesis but **does not establish an Atlassian service defect** in our account.
+
+### Investigation and safety constraints
+
+1. Do **not** repeat DCR client registration to retry identical consent flows. Each run creates a new client.
+2. On a future explicitly authorized test, inspect locally (never paste the full URL or request into PRs) that authorization has exactly one `client_id`, `redirect_uri`, `resource`, `scope`, `state`, `code_challenge`, `code_challenge_method`, and `response_type`; ensure the DCR response and authorize request refer to the same client and exact callback URI. Do not expose the values of `client_id`, `state`, `code_challenge` or authorization codes.
+3. The current implementation requests `scope=read:bitbucket:agent-interface` and `resource=https://mcp.atlassian.com/v2/mcp`. The generic Atlassian 3LO guide requires `audience=api.atlassian.com` for regular 3LO apps, **but this does not prove the Rovo MCP v2 DCR flow requires it**. Do not inject `audience`, `prompt`, extra scopes, or token-handling changes without a matching official profile or controlled compatibility evidence.
+4. If the generated parameters check out, take the UTC/JST timestamp, **private** Atlassian request/reference ID from the error page, client type (new v2 Identity DCR), resource and scope names, and the observed consent result to Atlassian developer support. Keep raw URLs, client credentials, site IDs, and correlation details out of the public repository.
+5. No Worker handoff or token exchange should be attempted until a correct callback and grant authorization are evidenced.
+
 ## Gates not passed
 
 | Gate | State |
 |---|---|
 | Public v2 resource metadata in this environment | VERIFIED_BY_OPERATOR (metadata only) |
 | Tenant-scoped DCR registration | HTTP_2XX_OBSERVED; valid public-client response NOT YET CONFIRMED |
-| Organization-specific localhost loopback and Bitbucket consent | NOT TESTED |
+| Organization-specific localhost loopback and Bitbucket consent | CONSENT_SCREEN_REACHED; INVALID_REQUEST_AFTER_ACCEPT; LOOPBACK_CALLBACK_NOT_CONFIRMED |
 | Token exchange and refresh | NOT IMPLEMENTED |
 | Safe localhost-to-Worker token handoff | NOT IMPLEMENTED |
 | Per-user authorization, nested tool enforcement and audited read-only policy | NOT IMPLEMENTED |
