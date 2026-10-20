@@ -6,14 +6,11 @@ const root=new URL('./',import.meta.url);
 const read=path=>readFileSync(new URL(path,root),'utf8');
 const compose=read('compose.mcp-remote.yaml');
 const image=read('Dockerfile.mcp-remote');
-const metadata=JSON.parse(read('bitbucket-readonly-client.json'));
 
-test('mcp-remote OAuth metadata pins only Bitbucket read without broader access',()=>{
-  assert.deepEqual(metadata,{scope:'read:bitbucket:agent-interface'});
-  assert.equal(Object.hasOwn(metadata,'grant_types'),false);
-  assert.equal(Object.hasOwn(metadata,'token_endpoint_auth_method'),false);
-  assert.equal(Object.hasOwn(metadata,'client_id'),false);
-  assert.equal(Object.hasOwn(metadata,'client_secret'),false);
+test('mcp-remote negotiates OAuth scopes as successful tunnel, without a forced read-only profile',()=>{
+  assert.doesNotMatch(compose,/--static-oauth-client-metadata|--static-oauth-client-info/);
+  assert.doesNotMatch(compose,/bitbucket-readonly-client\.json|read:bitbucket:agent-interface/);
+  assert.doesNotMatch(compose,/--authorize-param|prompt=consent|--skip-resource/);
 });
 test('isolated local OAuth uses published pinned version with non-root runtime',()=>{
   assert.match(image,/npm install --global --omit=dev mcp-remote@0\.14\.3/);
@@ -30,13 +27,12 @@ test('same v2 endpoint and callback semantics as successful tunnel, but non-conf
   assert.match(compose,/- localhost/);
   assert.match(compose,/- \/oauth\/callback/);
   assert.match(compose,/- http-only/);
-  assert.match(compose,/- --static-oauth-client-metadata/);
-  assert.match(compose,/- "@\/etc\/mcp-bridge\/bitbucket-readonly-client\.json"/);
-  assert.doesNotMatch(compose,/--authorize-param|prompt=consent|--skip-resource/);
+  assert.match(compose,/- "180"/);
 });
-test('credential isolation and no cloud/legacy token handoff',()=>{
-  assert.match(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth/);
-  assert.match(compose,/bitbucket-readonly-client\.json:\/etc\/mcp-bridge\/bitbucket-readonly-client\.json:ro/);
+test('new negotiated-scope cache is separate from failed Bridge and existing ChatGPT tunnel',()=>{
+  assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);
+  assert.match(compose,/^  atlassian-oauth-negotiated-cache:$/m);
+  assert.doesNotMatch(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth|oauth-data:\/home\/node\/\.mcp-auth/);
   assert.match(compose,/read_only: true/);
   assert.match(compose,/cap_drop: \[ALL\]/);
   assert.match(compose,/no-new-privileges:true/);

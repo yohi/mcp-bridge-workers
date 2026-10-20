@@ -1,6 +1,6 @@
 # Local OAuth tools
 
-**Current supported path:** local `mcp-remote@0.14.3` integration, isolated credential volume and only `read:bitbucket:agent-interface`. The working `chatgpt-mcp-tunnel` OAuth cache is not reused. See [implementation guide](../../docs/mcp-remote-auth-adoption.md).
+**Current supported path:** local `mcp-remote@0.14.3` integration, new isolated negotiated-scope credential volume. The previous Bitbucket-only override was removed for connection-first operation. The working `chatgpt-mcp-tunnel` OAuth cache is not reused. See [implementation guide](../../docs/mcp-remote-auth-adoption.md).
 
 To build the pinned local runtime without Atlassian login:
 
@@ -14,7 +14,7 @@ Only after explicit owner/company authorization for an additional OAuth client r
 npm run auth:atlassian-local
 ```
 
-This interactive command can perform DCR, consent, code/token exchange, refresh and local token storage. Do not copy the console output or OAuth cache to a public issue. **It does not authenticate Cloudflare Workers.**
+This interactive command can perform DCR, consent, code/token exchange, refresh and local token storage, requesting the scopes advertised by the OAuth resource rather than only Bitbucket Read. It may request broader permissions, so review the consent screen. Do not copy the console output or OAuth cache to a public issue. **It does not authenticate Cloudflare Workers.**
 
 ## Archived custom DCR experiment (not an operational OAuth client)
 

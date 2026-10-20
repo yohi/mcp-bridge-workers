@@ -1,73 +1,46 @@
-# Adopt known-working mcp-remote v0.14.3 for local Atlassian OAuth (PR #2)
+# Atlassian Rovo MCP v2 — connection-first local OAuth
 
-**Status: implementation staged, never executed by CI or the assistant.**
-The user's `chatgpt-mcp-tunnel` successfully authenticated against `https://mcp.atlassian.com/v2/mcp` via `mcp-remote@0.14.3`, including a Bitbucket workspace read. The Bridge's bespoke DCR/PKCE probe, in contrast, twice reached Atlassian consent but received `invalid_request` after Accept. Do not repeat that experiment as a default path.
+**Current path (2026-10-20):** Start with the exact OAuth scope negotiation behavior that already worked in `chatgpt-mcp-tunnel`, rather than another Bitbucket-only DCR experiment.
 
-## What is implemented
+## What changed
 
-- Local **Linux Docker Compose** auth-only service using **mcp-remote-client@0.14.3**, Node.js 22, `http-only`, and `http://localhost:38678/oauth/callback`. Separate port from the working tunnel's default `38677` avoids collision.
-- Dedicated named Docker volume under a different Compose project, not shared with `chatgpt-mcp-tunnel`.
-- `--static-oauth-client-metadata @/etc/mcp-bridge/bitbucket-readonly-client.json` pins `scope: read:bitbucket:agent-interface` and **does not copy broad Jira/Confluence/write scopes**.
-- Upstream mcp-remote retains responsibility for v2 discovery, DCR, OAuth authorization, PKCE, code exchange and local token refresh. **Not independently proven in this newly isolated read-only configuration.**
-- The repository retains the earlier bespoke DCR probe **only as archived investigation code**; it is removed from normal npm scripts. Running `check-localhost-redirect.mjs --register` manually would still register a new client: do not do so.
-- No Worker token handoff, token injection or credential access implemented.
+The local Bridge auth service uses pinned **`mcp-remote@0.14.3`** without any `--static-oauth-client-metadata` override. The package discovers the Rovo MCP v2 server's supported scopes and handles DCR, browser authorization, token exchange, local refresh, and the MCP client connection.
 
-## Explicit manual operations (NOT done by assistant / CI)
+The previously failed Bridge version forced a single OAuth scope (`read:bitbucket:agent-interface`). That restriction is **temporarily removed with the owner's approval to prioritize connectivity**. The separate previously successful `chatgpt-mcp-tunnel` requested 40 scopes and had 21 stored granted scopes. Its actual requested scopes included write/delete/manage prefixes; the stored granted scope had none of those prefixes. **New permissions are not guaranteed to match that prior session**, so carefully review Atlassian's actual consent screen and allow only authorized workspaces/sites. The system has not proven a strict read-only security boundary.
 
-First review company approval for the OAuth client, including the particular scope. On the Linux host, from the mcp-bridge-workers repository root:
+The new local Compose service intentionally uses a **fresh named Docker volume** `atlassian-oauth-negotiated-cache`. This prevents it from silently reusing the previous Bridge client registration created with an incompatible fixed-scope request. The old failed Bridge volume and the successful `chatgpt-mcp-tunnel` volume remain untouched. Do not copy any credentials between them.
+
+## Start the real local connection
+
+On the trusted Linux host with the Bridge repository checked out:
 
 ```bash
-npm install --ignore-scripts --no-audit --no-fund
-npm test
+cd ~/program/private/mcp-bridge-workers
+git pull
 npm run auth:atlassian-local:build
-
-# ONLY after explicitly consenting to one new DCR registration and OAuth login:
 npm run auth:atlassian-local
 ```
 
-The build step downloads packages and Docker image layers but performs no Atlassian login. The **auth** step can create an Atlassian OAuth client, trigger browser consent, exchange an authorization code, save access/refresh tokens and list tools. Unlike the old callback-discarding probe, it can maintain a local OAuth session. Opening the generated authorization URL must happen in the browser on that same Linux host.
+The first command builds the local image; **the second can register a new OAuth client, display an interactive authorization URL, obtain access/refresh tokens, and save them in the new local volume.** Open the authorization URL only in a browser on that Linux host. Keep the CLI running until authorization completes. By design, the callback is `http://localhost:38678/oauth/callback` (port `38678` avoids the original tunnel's default `38677`). Do not execute either in GitHub Actions or elsewhere without checking company authorization policies.
 
-The auth command is **not a guaranteed solution to the earlier `invalid_request`**: the pinned Bitbucket-only scope differs from the previously working `mcp-remote` default. The operator subsequently reported **invalid_request after Accept** for this isolated scoped client. It is therefore no longer NOT TESTED; it is FAILED for the observed attempt, and the root cause remains unknown. Do not share terminal output: it can include an authorization URL, tool metadata, organizational identifiers or error details. Share sanitized milestone statuses only, not tokens, IDs or raw OAuth URLs.
+This is an operational login path, not a request for repeated experiments. If it fails after Atlassian Accept with `invalid_request` again, **stop** rather than initiating another new DCR registration. Do not paste raw OAuth URLs, authorization codes, tokens, full CLI logs or client information into chat or the GitHub PR.
 
-**No credential reuse:** This compose file deliberately does not mount `chatgpt-mcp-tunnel`'s OAuth volume or reference its control plane API key. Do not copy `client_info.json`, `tokens.json` or PKCE cache from the successful tunnel: that would silently reuse whatever broader scopes it was granted.
+The CLI will attempt to list MCP tools/resources on success. This makes a **local** connection only; do not claim ChatGPT's Cloudflare MCP Portal is connected as a result.
 
-**Host-network limitation:** `network_mode: host` reduces container network isolation. Use only on a trusted Linux host; this mode is not a supported Cloudflare Workers runtime. Named Docker cache is not encrypted by this project; restrict host/Docker access, do not back it up casually, and never run commands such as `docker compose down -v` without separately approving deletion of the OAuth cache.
-
-## Architecture and critical unresolved gates
+## Cloudflare Portal is still a separate step
 
 ```text
-Linux host
-  browser -> localhost:38678/oauth/callback
-              ^  mcp-remote-client@0.14.3
-              |  private OAuth volume (not exposed)
-              v
-         Atlassian Rovo MCP v2
+Laptop / Linux host
+  Browser -> mcp-remote@0.14.3 -> Atlassian Rovo MCP v2
+  Local OAuth cache (separate Docker volume)
 
-Cloudflare MCP Portal -> Cloudflare Worker -> Rovo MCP v2
-                                       ^
-                                       |
-                              NO credential bridge exists
+Cloudflare MCP Portal -> Cloudflare Worker -> Atlassian Rovo MCP v2
+                                            ^
+                                Auth handoff NOT implemented
 ```
 
-The local Docker client **cannot make the Cloudflare Worker authenticated by itself**. Worker still expects `UPSTREAM_AUTHORIZATION` as a separately provisioned bearer value. Nothing here copies or transfers local tokens to Workers, logs them, writes a local token export or changes the Worker. Treat authentication-to-Worker handoff as a separate security design requiring explicit human approval, per-user binding, encrypted storage, token expiry/refresh and revocation semantics before any implementation.
+The current Worker relies on `UPSTREAM_AUTHORIZATION` and does **not** read this Docker volume, implement OAuth refresh or securely receive the local OAuth session. To complete Portal connectivity, a separately designed credential mechanism (or an authenticated private local relay) must bridge that boundary. No cloud token copy/export, Worker secrets, Cloudflare deployments, org permissions or production tool allowlists were changed by this commit. A request to prioritize connectivity does not, by itself, authorize handing over the separate previously successful tunnel's token or enabling unrestricted tool mutation.
 
-Even successful local OAuth **does not prove** Bitbucket Read-only enforcement for nested `executeRead` operations, tools/list filtering, Portal caller identity binding, or the Cloudflare Workers Free resource model. Leave those gates blocked.
+**Operational status:** Local scope negotiation now matches successful mcp-remote behavior (except separate registration/cache/port). New local login **not yet observed**; Portal-to-Worker-to-Atlassian **not yet connected**. PR #2 remains Draft until an end-to-end route actually works.
 
-## Exit criteria
-
-1. Local client using scoped mcp-remote succeeds without falling back to legacy OAuth or gaining write grants.
-2. Token state stays only in this isolated local volume; no raw secrets or tenant information are uploaded.
-3. Separately design and review the credentials handoff, identity mapping, and strict nested read-only authorization.
-4. Only after those gates pass, begin end-to-end Portal -> Worker -> Atlassian tests.
-
-**Do not claim OAuth or Worker end-to-end success based on unit tests, successful Docker build, or the other project's known-good session.**
-
-
-## New operator-reported post-Accept failure (2026-10-20)
-
-The newly isolated, explicitly Bitbucket-Read-scoped mcp-remote@0.14.3 client also received invalid_request / Incorrect request parameters after Accept. The mere switch from bespoke DCR to mcp-remote is **not** a fix. There is no basis for turning on wider Jira/Confluence or write scopes. Do not re-run DCR/login yet. Instead use the [safe offline successful-token scope metadata inspection](mcp-remote-success-scope-check.md) to classify previously requested/granted scope features without printing any credentials. This uses the existing, separately successful chatgpt-mcp-tunnel OAuth cache; the Bridge never mounts or copies it.
-
-
-## Latest successful-tunnel scope evidence (2026-10-20)
-
-The owner re-authenticated the **existing** successful chatgpt-mcp-tunnel and ran the safe inspector against its local cached token. The successful registration has 40 **requested** and 21 **granted** scopes, including Bitbucket Read, Jira Read, Confluence Read, read:me, read:account and offline_access. The requested list contains write/delete/manage prefixed scopes; the granted list contains none of those prefixes. The Bridge-only Bitbucket Read scope is a **major difference, not a confirmed root cause**. Do **not** copy the 40-scope request, re-use the successful tunnel's token or assume 21 granted scopes are sufficient to enforce read-only deferred tools. See [evidence, limitations and explicit gate](mcp-remote-success-scope-check.md#operator-verified-successful-scope-classification-2026-10-20-jst).
+For old evidence and the read-only scope comparison, see [OAuth feasibility history](oauth-feasibility.md) and [successful tunnel scope inspection](mcp-remote-success-scope-check.md).

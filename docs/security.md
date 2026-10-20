@@ -12,10 +12,10 @@
 ## Current staged OAuth route — mcp-remote@0.14.3 (PR #2)
 
 - Authentication is delegated to the same pinned mcp-remote version as the operator's separately successful chatgpt-mcp-tunnel.
-- A dedicated auth-only Docker Compose service (Linux host networking, explicit human invocation) uses port 38678, a separate named credential volume, and a JSON metadata file pinning only `read:bitbucket:agent-interface`.
+- A dedicated auth-only Docker Compose service (Linux host networking, explicit human invocation) uses port 38678 and a **new** named credential volume. Owner has temporarily approved removing the Bitbucket-Read-only scope override; this profile uses mcp-remote's default negotiated scopes, potentially including permissions beyond Bitbucket Read. Review consent and organizational policy before login.
 - It may perform DCR, consent, exchange and refresh **only when the human explicitly runs** `npm run auth:atlassian-local`; never from CI or Worker code.
 - No credentials are mounted from chatgpt-mcp-tunnel or made available to the Worker. No local-to-cloud handoff exists.
-- This specific restricted-scope deployment is **NOT RUNTIME PROVEN**. The broader-scope successful tunnel does not establish that the new scope succeeds.
+- The **previous fixed Bitbucket-only profile failed** after consent; the new negotiated-scope profile is **NOT RUNTIME PROVEN**. The original tunnel's success does not imply this fresh DCR client will succeed.
 - `npm run probe:atlassian-localhost` has been removed. The old source file exists solely as a historical, explicit-opt-in experiment and should not be repeated without a separate review.
 - Detailed [adoption plan and gates](mcp-remote-auth-adoption.md).
 
@@ -52,3 +52,7 @@ User reported invalid_request after Accept in the new scoped mcp-remote integrat
 ## Successful-client requested vs granted scopes: operator evidence (2026-10-20)
 
 The read-only inspector on the now-logged-in existing tunnel returned 40 requested vs 21 granted scopes; the classification found no write/delete/manage prefixes in the **granted_scope field**. This is not a security proof that all mutation pathways are unavailable. The working client's observed granted scopes also include Jira/Confluence Read, identity scopes and offline_access, so copying the successful client's credentials or default scopes to Bridge would exceed its Bitbucket-only target. New live login experiments must require explicit authorization and an independently reviewed narrow scope set. Source [sanitized evidence](mcp-remote-success-scope-check.md#operator-verified-successful-scope-classification-2026-10-20-jst).
+
+## Connection-first scope choice (2026-10-20)
+
+Owner approved temporarily lifting the strict Bitbucket-only OAuth scope restriction to prioritize operational connection. The current Compose file omits `--static-oauth-client-metadata` and isolates the new negotiation in a fresh OAuth volume, without copying any tokens. Historical scoped registration and stored tokens are left intact. Existing Cloudflare Worker does not gain new privileges or receive a credential. Since OAuth may request mutating scopes, local permission safety must **not** be asserted. See [current local connection instructions](mcp-remote-auth-adoption.md).

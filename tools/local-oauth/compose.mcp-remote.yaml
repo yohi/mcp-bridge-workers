@@ -1,4 +1,5 @@
-# Explicit interactive OAuth only. No service is started by npm test or CI.
+# Connection-first: mirror successful mcp-remote OAuth scope negotiation.
+# Interactive only; no service is started by npm test or CI.
 # Linux-only host networking enables the browser on the same host to reach callback.
 name: mcp-bridge-atlassian-local-auth
 services:
@@ -17,8 +18,7 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=32m
     volumes:
-      - atlassian-oauth-cache:/home/node/.mcp-auth
-      - ./bitbucket-readonly-client.json:/etc/mcp-bridge/bitbucket-readonly-client.json:ro
+      - atlassian-oauth-negotiated-cache:/home/node/.mcp-auth
     environment:
       MCP_REMOTE_CONFIG_DIR: /home/node/.mcp-auth
     entrypoint: ["mcp-remote-client"]
@@ -33,7 +33,5 @@ services:
       - /oauth/callback
       - --auth-timeout
       - "180"
-      - --static-oauth-client-metadata
-      - "@/etc/mcp-bridge/bitbucket-readonly-client.json"
 volumes:
-  atlassian-oauth-cache:
+  atlassian-oauth-negotiated-cache:
