@@ -42,3 +42,8 @@ The `/health` endpoint reports static status only; `/mcp` requires authorization
 ## Atlassian DCR compatibility note
 
 Atlassian may issue an unexpected `client_secret` for a public client with `token_endpoint_auth_method=none`. The localhost callback-only probe ignores that field, never logs, stores or uses it, and requires a literal returned `none` authentication method and exact callback URI. Registration HTTP success can create a client even if validation stops later. See [OAuth runbook](oauth-feasibility.md). No tokens are exchanged.
+
+
+## Scope differential diagnosis (2026-10-20)
+
+User reported invalid_request after Accept in the new scoped mcp-remote integration. No success claim may be made based on CI. The dedicated scope metadata inspector only locally reads saved token fields in the already-working tunnel and prints allowlisted booleans/counts. It does not migrate, log or expose the tokens. Do not re-run OAuth registration or introduce extra permissions without new evidence and approval. See [offline scope check](mcp-remote-success-scope-check.md).

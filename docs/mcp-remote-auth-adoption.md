@@ -61,3 +61,8 @@ Even successful local OAuth **does not prove** Bitbucket Read-only enforcement f
 4. Only after those gates pass, begin end-to-end Portal -> Worker -> Atlassian tests.
 
 **Do not claim OAuth or Worker end-to-end success based on unit tests, successful Docker build, or the other project's known-good session.**
+
+
+## New operator-reported post-Accept failure (2026-10-20)
+
+The newly isolated, explicitly Bitbucket-Read-scoped mcp-remote@0.14.3 client also received invalid_request / Incorrect request parameters after Accept. The mere switch from bespoke DCR to mcp-remote is **not** a fix. There is no basis for turning on wider Jira/Confluence or write scopes. Do not re-run DCR/login yet. Instead use the [safe offline successful-token scope metadata inspection](mcp-remote-success-scope-check.md) to classify previously requested/granted scope features without printing any credentials. This uses the existing, separately successful chatgpt-mcp-tunnel OAuth cache; the Bridge never mounts or copies it.
