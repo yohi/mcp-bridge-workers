@@ -54,7 +54,8 @@ test('localhost relay container shares only the new OAuth cache, uses userns-saf
   assert.match(compose,/relay-secret-init:\n\s+condition: service_completed_successfully/);
   assert.match(compose,/network_mode: none/);
   assert.match(compose,/cap_add: \[CHOWN, DAC_OVERRIDE\]/);
-  assert.match(compose,/install -o 1000 -g 1000 -m 0400/);
+  assert.match(compose,/install -m 0400 \/run\/bootstrap\/relay-token \/run\/relay-secrets\/\.token-next/);
+  assert.match(compose,/chown 1000:1000 \/run\/relay-secrets\/\.token-next/);
   assert.match(compose,/RELAY_SECRET_STAGED_FOR_NODE/);
   assert.doesNotMatch(compose,/^\s+secrets:/m);
   assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);

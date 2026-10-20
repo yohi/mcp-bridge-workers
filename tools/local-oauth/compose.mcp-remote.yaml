@@ -72,7 +72,10 @@ services:
           exit 1
         fi
         trap 'rm -f /run/relay-secrets/.token-next' EXIT
-        install -o 1000 -g 1000 -m 0400 /run/bootstrap/relay-token /run/relay-secrets/.token-next
+        # First create/chmod as the current owner; chown as the final metadata
+        # operation. This needs CHOWN, but not FOWNER after changing UID.
+        install -m 0400 /run/bootstrap/relay-token /run/relay-secrets/.token-next
+        chown 1000:1000 /run/relay-secrets/.token-next
         mv -f /run/relay-secrets/.token-next /run/relay-secrets/token
         test "$(stat -c %u /run/relay-secrets/token)" = 1000
         test "$(stat -c %a /run/relay-secrets/token)" = 400
