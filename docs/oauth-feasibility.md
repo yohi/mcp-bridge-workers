@@ -1,5 +1,7 @@
 # Atlassian Rovo MCP **v2** OAuth feasibility
 
+> **CURRENT IMPLEMENTATION (2026-10-20):** This document records the **retired bespoke DCR probe** and its two Atlassian post-consent failures. The normal npm probe script has been removed. A staged local `mcp-remote@0.14.3` auth-only implementation now lives in [mcp-remote adoption](mcp-remote-auth-adoption.md). It uses Bitbucket Read scope and a separate Docker cache, but has **not yet been run**, and Cloudflare Worker token handoff remains unimplemented. Historical steps below are **not** instructions to rerun the failed experiment.
+
 Status (2026-10-20 JST): **v2 protected-resource and Atlassian Identity authorization metadata confirmed; validated public-client DCR response accepted; Atlassian consent displayed but rejected after Accept twice (`invalid_request`); localhost callback NOT PROVEN; no token exchange or Worker handoff**. This project must NOT treat successful discovery of `https://mcp.atlassian.com/.well-known/oauth-authorization-server` as proof of v2 readiness.
 
 ## Why the earlier v1 login was wrong
@@ -47,12 +49,13 @@ The operator confirmed the v2 discovery fields on 2026-10-20. This is a represen
 
 If `result` is `not_proven` or Bitbucket scope is `not_proven`, STOP. Do not run the optional probe until the discrepancy is investigated. The CLI exits nonzero when protected-resource or issuer metadata fails.
 
-## Step 2: deliberate local DCR + browser callback experiment
+## Archived step 2 (RETIRED): deliberate local DCR + browser callback experiment
 
 Requires authorization under the Atlassian organization's policies. This command makes **one DCR POST**, registering an OAuth client with a unique local redirect URI. It is **not** a read-only check and must never be run by CI.
 
-```bash
-npm run probe:atlassian-localhost
+```text
+RETIRED: the npm script probe:atlassian-localhost has been removed.
+The bespoke DCR source remains for audit evidence only.
 ```
 
 The probe will:

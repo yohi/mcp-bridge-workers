@@ -11,7 +11,7 @@ ChatGPT / OpenCode --> Cloudflare MCP Portal --> Worker (per provider)
 
 - `packages/core` — shared MCP relay transport and request checks
 - `workers/atlassian` — Atlassian Rovo MCP v2 adapter
-- `tools/local-oauth` — **v2-only** OAuth metadata discovery and opt-in loopback callback test
+- `tools/local-oauth` — v2-only metadata inspection, historical DCR failure evidence, and a staged local `mcp-remote@0.14.3` auth client
 - `docs` — architecture, security and OAuth feasibility protocol
 
 ## Validate locally (Node.js >=20)
@@ -24,10 +24,10 @@ npm run check:atlassian-oauth
 
 This metadata check performs unauthenticated GETs against the **v2 protected-resource metadata**, then its advertised tenant-scoped Atlassian Identity authorization server. It will not fall back to `mcp.atlassian.com/v1/authorize`.
 
-**OAuth feasibility:** read [docs/oauth-feasibility.md](docs/oauth-feasibility.md). The optional `npm run probe:atlassian-localhost` sends a DCR registration POST only when explicitly run on an authorized local machine. It never exchanges, stores or forwards tokens.
+**OAuth feasibility:** the custom DCR probe repeatedly failed after Atlassian consent. It has been retired from normal npm scripts. The **new local OAuth implementation** uses the known-working `mcp-remote@0.14.3` in its own Linux Docker container with a dedicated credential volume and *only* the Bitbucket Read scope. See [local OAuth adoption](docs/mcp-remote-auth-adoption.md) for operator-controlled build/login instructions and outstanding gates. Do not run login from CI. Source-level v2 evidence remains in [the historical protocol](docs/oauth-feasibility.md).
 
 Never commit credentials or secrets. The Worker requires two independent secrets: `PORTAL_BEARER_TOKEN` for Portal-to-Worker traffic, and `UPSTREAM_AUTHORIZATION` for the upstream Rovo MCP endpoint. Neither is configured by this repository or CI.
 
 ## Deployment (NOT performed)
 
-The Worker may be deployed with `npm run deploy:atlassian` only after review. Restrict the MCP Portal mapping to **one user**. This PoC neither refreshes upstream credentials nor implements localhost OAuth token handoff. Read [security](docs/security.md) and [v2 compatibility](docs/atlassian-v2-compatibility.md) before any deployment.
+The Worker may be deployed with `npm run deploy:atlassian` only after review. Restrict the MCP Portal mapping to **one user**. This PoC does not refresh Worker-side credentials or implement a safe localhost-to-Worker handoff. Local mcp-remote is capable of refreshing its own isolated cached credentials, but it does not make the Cloudflare Worker authenticated. Read [security](docs/security.md) and [v2 compatibility](docs/atlassian-v2-compatibility.md) before any deployment.

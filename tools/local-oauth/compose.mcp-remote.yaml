@@ -1,0 +1,39 @@
+# Explicit interactive OAuth only. No service is started by npm test or CI.
+# Linux-only host networking enables the browser on the same host to reach callback.
+name: mcp-bridge-atlassian-local-auth
+services:
+  auth:
+    profiles: [auth]
+    build:
+      context: ../..
+      dockerfile: tools/local-oauth/Dockerfile.mcp-remote
+    image: mcp-bridge-atlassian-auth:0.14.3
+    network_mode: host
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m
+    volumes:
+      - atlassian-oauth-cache:/home/node/.mcp-auth
+      - ./bitbucket-readonly-client.json:/etc/mcp-bridge/bitbucket-readonly-client.json:ro
+    environment:
+      MCP_REMOTE_CONFIG_DIR: /home/node/.mcp-auth
+    entrypoint: ["mcp-remote-client"]
+    command:
+      - https://mcp.atlassian.com/v2/mcp
+      - "38678"
+      - --transport
+      - http-only
+      - --host
+      - localhost
+      - --callback-path
+      - /oauth/callback
+      - --auth-timeout
+      - "180"
+      - --static-oauth-client-metadata
+      - "@/etc/mcp-bridge/bitbucket-readonly-client.json"
+volumes:
+  atlassian-oauth-cache:

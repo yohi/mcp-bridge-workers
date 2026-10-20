@@ -9,18 +9,28 @@
 - `tools/call` is gated by an explicit **top-level tool-name** allowlist.
 - No real credentials are included in source code, test fixtures, or logs.
 
-## OAuth v2 feasibility (PR #2)
+## Current staged OAuth route — mcp-remote@0.14.3 (PR #2)
+
+- Authentication is delegated to the same pinned mcp-remote version as the operator's separately successful chatgpt-mcp-tunnel.
+- A dedicated auth-only Docker Compose service (Linux host networking, explicit human invocation) uses port 38678, a separate named credential volume, and a JSON metadata file pinning only `read:bitbucket:agent-interface`.
+- It may perform DCR, consent, exchange and refresh **only when the human explicitly runs** `npm run auth:atlassian-local`; never from CI or Worker code.
+- No credentials are mounted from chatgpt-mcp-tunnel or made available to the Worker. No local-to-cloud handoff exists.
+- This specific restricted-scope deployment is **NOT RUNTIME PROVEN**. The broader-scope successful tunnel does not establish that the new scope succeeds.
+- `npm run probe:atlassian-localhost` has been removed. The old source file exists solely as a historical, explicit-opt-in experiment and should not be repeated without a separate review.
+- Detailed [adoption plan and gates](mcp-remote-auth-adoption.md).
+
+## Historical OAuth v2 feasibility (bespoke DCR; retired)
 
 - **Fail closed on v2 OAuth discovery:** require the exact `/v2/mcp` protected-resource metadata URL and its tenant-scoped Atlassian Identity issuer.
 - Never use `mcp.atlassian.com/v1/authorize`, `/v1/token`, `/v1/register` for new v2 feasibility tests.
 - Require advertised PKCE S256, Authorization Code, DCR and `read:bitbucket:agent-interface` before explicit DCR / browser callback test.
 - `npm run check:atlassian-oauth`: read-only metadata GET; no login, registration or token.
-- `npm run probe:atlassian-localhost`: explicitly opted-in POST creating one DCR client, followed by local interactive consent; discard callback codes; no token exchange or handoff.
+- Former `npm run probe:atlassian-localhost`: retired from package scripts after repeated post-Accept `invalid_request`; the historical test tool is not the supported authentication route.
 - Any prior success output using the root v1 metadata is **not v2 evidence**. See [OAuth runbook](oauth-feasibility.md).
 
 ## NOT PROVEN / NOT IMPLEMENTED
 
-- Atlassian Identity DCR registration and Bitbucket localhost OAuth consent for the user's organization.
+- Historical Bridge DCR registration was observed successful; its custom Bitbucket-only consent failed twice after Accept. Scoped mcp-remote replacement not yet executed.
 - Token exchange, refresh, local-to-Worker handoff, rotation and encrypted D1 store.
 - Read-only enforcement of deferred nested `executeRead` operations; naming is not authorization.
 - `tools/list` filtering; a caller may see blocked tools.

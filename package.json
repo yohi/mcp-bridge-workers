@@ -12,7 +12,8 @@
     "dev:atlassian": "npm run dev -w @mcp-bridge/atlassian",
     "deploy:atlassian": "npm run deploy -w @mcp-bridge/atlassian",
     "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs",
-    "probe:atlassian-localhost": "node tools/local-oauth/check-localhost-redirect.mjs --register"
+    "auth:atlassian-local:build": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile auth build auth",
+    "auth:atlassian-local": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile auth run --rm auth"
   },
   "engines": {
     "node": ">=20"
