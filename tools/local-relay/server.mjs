@@ -123,9 +123,14 @@ export class StdioRpc {
 }
 
 async function main(){
-  if(!process.env.RELAY_SECRET_FILE)throw Error('relay secret file not configured');
-  const secret=readFileSync(process.env.RELAY_SECRET_FILE,'utf8').trim();
-  if(secret.length<32)throw Error('relay secret is too short');
+  if(!process.env.RELAY_SECRET_FILE)throw Error('secret_not_configured');
+  let secret;
+  try {
+    secret=readFileSync(process.env.RELAY_SECRET_FILE,'utf8').trim();
+  }catch {
+    throw Error('secret_not_readable');
+  }
+  if(secret.length<32)throw Error('secret_too_short');
   const args=['https://mcp.atlassian.com/v2/mcp','38678','--transport',
     'http-only','--host','localhost','--auth-timeout','180'];
   const child=spawn('mcp-remote',args,{stdio:['pipe','pipe','ignore'],env:process.env});
@@ -137,5 +142,11 @@ async function main(){
   child.on('exit',()=>{server.close();process.exitCode=1;});
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){
-  main().catch(()=>{process.exitCode=1;});
+  main().catch(error=>{
+    // Never print raw exception details: they may contain environment/paths.
+    const safeCodes=new Set(['secret_not_configured','secret_not_readable','secret_too_short']);
+    const code=safeCodes.has(error?.message)?error.message:'startup_failed';
+    process.stderr.write('MCP_RELAY_STARTUP_FAILED: '+code+'\n');
+    process.exitCode=1;
+  });
 }

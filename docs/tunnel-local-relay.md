@@ -35,7 +35,7 @@ npm run relay:atlassian-local
 curl -i http://127.0.0.1:18787/health
 ```
 
-The relay token file is ignored by Git and mounted through Compose secrets; preserve its confidentiality. It must be readable by the `node` UID inside the Linux container; do not make it world-readable as a workaround. Stop it with `npm run relay:atlassian-local:stop`. Do not run a new interactive auth client concurrently with the relay. `/health` reports **liveness only**, not upstream authorization or Portal connectivity.
+The relay token file is ignored by Git and mounted directly **read-only** as `/run/secrets/relay_auth_token`; its value stays in a `0600` host file. Docker Compose file-based `secrets` cannot reliably remap UID/GID in this environment, so this direct bind avoids the failing secret mount. The trusted host file owner UID must match the container `node` UID (1000 in this pinned Node image). Confirm safely with `stat -c 'host uid=%u mode=%a' tools/local-oauth/.relay-token` and `id -u`; do not print its contents or make it world-readable. The bind explicitly sets `create_host_path: false` to avoid creating an empty directory if the token is missing. Stop it with `npm run relay:atlassian-local:stop`. Do not run a new interactive auth client concurrently with the relay. `/health` reports **liveness only**, not upstream authorization or Portal connectivity.
 
 ## 2. Cloudflare Tunnel and Access (manual, not executed)
 
@@ -75,3 +75,18 @@ These commands mutate Cloudflare secrets and have **not** been run by the assist
 - The Worker still restricts top-level tool names via its existing allowlist. Nested operations of `executeRead` are not proved read-only; OAuth scope discovery can include permissions broader than Bitbucket.
 - If the local PC, `cloudflared`, Access policy or local cached OAuth session is unavailable, the Portal route will fail.
 - OAuth success and offline unit tests are **not** proof of Cloudflare Portal end-to-end connectivity. No deployment, DCR, Cloudflare configuration or external secrets have been changed by this implementation.
+
+## Fixed local startup failure: unreadable Compose secret (2026-10-20)
+
+Operator observed `Restarting (1)` and `RELAY_SECRET_NOT_READABLE` with the non-root container UID 1000. This was the local relay's failure to read the file-based Compose secret, **not an Atlassian OAuth failure**. The Compose configuration now uses a direct read-only bind mount of the existing `0600` host token, preserving UID ownership. The Node relay also emits a safe, fixed `MCP_RELAY_STARTUP_FAILED: secret_not_readable` indicator if reading still fails; it never prints secret contents or raw exception text.
+
+**Do not regenerate `.relay-token`**, which may already be staged for Cloudflare. The file's existing contents are unchanged. After `git pull`, run:
+
+```bash
+cd ~/program/private/mcp-bridge-workers
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay up -d --force-recreate relay
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay ps -a
+curl -i http://127.0.0.1:18787/health
+```
+
+If it still fails, use `docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay logs --tail=30 relay` and share **only non-secret diagnostic codes**. Missing or unreadable files are a local host permissions problem; resolve ownership instead of widening permissions.

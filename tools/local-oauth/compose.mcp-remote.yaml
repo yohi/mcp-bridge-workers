@@ -54,8 +54,14 @@ services:
     volumes:
       - atlassian-oauth-negotiated-cache:/home/node/.mcp-auth
       - ../local-relay/server.mjs:/opt/mcp-relay/server.mjs:ro
-    secrets:
-      - relay_auth_token
+      # File-backed Compose secrets cannot remap uid/gid; direct read-only bind
+      # preserves the host file owner (0600, expected Linux UID 1000=node).
+      - type: bind
+        source: ./.relay-token
+        target: /run/secrets/relay_auth_token
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       MCP_REMOTE_CONFIG_DIR: /home/node/.mcp-auth
       RELAY_SECRET_FILE: /run/secrets/relay_auth_token
@@ -64,6 +70,3 @@ services:
 volumes:
   atlassian-oauth-negotiated-cache:
 
-secrets:
-  relay_auth_token:
-    file: ./.relay-token

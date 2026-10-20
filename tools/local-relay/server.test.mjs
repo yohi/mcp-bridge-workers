@@ -77,3 +77,18 @@ test('stdio fatal exit rejects in-flight requests',async()=>{
  const p=rpc.call(req('ping',1));child.emit('exit');
  await assert.rejects(p,/closed/);
 });
+
+test('startup failure reports only a safe code, never secret paths or values',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const {fileURLToPath}=await import('node:url');
+ const filename=fileURLToPath(new URL('./server.mjs',import.meta.url));
+ const invalid='/secret-path-SENSITIVE-not-found';
+ const run=spawnSync(process.execPath,[filename],{
+   env:{...process.env,RELAY_SECRET_FILE:invalid},
+   encoding:'utf8',timeout:3000
+ });
+ assert.equal(run.status,1);
+ assert.match(run.stderr,/MCP_RELAY_STARTUP_FAILED: secret_not_readable/);
+ assert.doesNotMatch(run.stderr,/SENSITIVE|\/secret-path|atlant|access_token|refresh_token/);
+ assert.equal(run.stdout,'');
+});

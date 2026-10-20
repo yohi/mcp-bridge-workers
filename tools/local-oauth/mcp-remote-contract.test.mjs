@@ -45,7 +45,10 @@ test('localhost relay container shares only the new OAuth cache, uses file-backe
   assert.match(compose,/entrypoint: \["node", "\/opt\/mcp-relay\/server\.mjs"\]/);
   assert.match(compose,/\.\.\/local-relay\/server\.mjs:\/opt\/mcp-relay\/server\.mjs:ro/);
   assert.match(compose,/RELAY_SECRET_FILE: \/run\/secrets\/relay_auth_token/);
-  assert.match(compose,/file: \.\/\.relay-token/);
+  assert.match(compose,/source: \.\/\.relay-token/);
+  assert.match(compose,/target: \/run\/secrets\/relay_auth_token/);
+  assert.match(compose,/read_only: true\n\s+bind:\n\s+create_host_path: false/);
+  assert.doesNotMatch(compose,/^\s+secrets:/m);
   assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);
   assert.doesNotMatch(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth/);
 });
