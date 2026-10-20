@@ -31,3 +31,7 @@ Never commit credentials or secrets. The Worker requires two independent secrets
 ## Deployment (NOT performed)
 
 The Worker may be deployed with `npm run deploy:atlassian` only after review. Restrict the MCP Portal mapping to **one user**. This PoC does not refresh Worker-side credentials or implement a safe localhost-to-Worker handoff. Local mcp-remote is capable of refreshing its own isolated cached credentials, but it does not make the Cloudflare Worker authenticated. Read [security](docs/security.md) and [v2 compatibility](docs/atlassian-v2-compatibility.md) before any deployment.
+
+## Cloudflare Tunnel backed by local OAuth (staged)
+
+The previously successful Bridge OAuth cache can now be used through a local HTTP→stdio adapter, with Cloudflare Access and a named Tunnel protecting the Worker→local hop. The Worker config selects `local_relay` and fails closed when its credentials are missing. No Atlassian OAuth token is copied into Workers. **Cloudflare deployment and actual Portal connection have not been executed.** See [operator runbook](docs/tunnel-local-relay.md).

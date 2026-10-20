@@ -56,3 +56,8 @@ The read-only inspector on the now-logged-in existing tunnel returned 40 request
 ## Connection-first scope choice (2026-10-20)
 
 Owner approved temporarily lifting the strict Bitbucket-only OAuth scope restriction to prioritize operational connection. The current Compose file omits `--static-oauth-client-metadata` and isolates the new negotiation in a fresh OAuth volume, without copying any tokens. Historical scoped registration and stored tokens are left intact. Existing Cloudflare Worker does not gain new privileges or receive a credential. Since OAuth may request mutating scopes, local permission safety must **not** be asserted. See [current local connection instructions](mcp-remote-auth-adoption.md).
+
+
+## Staged Worker-to-local relay security boundary
+
+The Worker now supports `local_relay` mode, explicitly selected in the deployable Wrangler config. Required HTTPS route and Access Service Auth credentials are Worker secrets; no local OAuth token is exported. Cloudflare Access is expected to enforce a Service Auth policy at the Tunnel hostname. The local listener binds to 127.0.0.1 and checks an unrelated bearer before reading MCP messages; its Docker Compose secret comes from a Git-ignored local file. This is a single-user PoC. GET SSE, per-session routing, full RPC capability negotiation, stream cancellation, deferred tool authorization and Cloudflare Portal connectivity remain **unverified**. [Runbook](tunnel-local-relay.md).
