@@ -26,16 +26,18 @@ git pull
 npm install --ignore-scripts --no-audit --no-fund
 npm test
 
-# New independent relay bearer; not the Atlassian OAuth token.
-umask 077
-openssl rand -hex 32 > tools/local-oauth/.relay-token
+# Keep the already-working relay bearer. Create one only on first setup.
+if test ! -e tools/local-oauth/.relay-token; then
+  umask 077
+  openssl rand -hex 32 > tools/local-oauth/.relay-token
+fi
 
 # Starts the HTTP→stdio relay using the ALREADY logged-in Bridge cache.
 npm run relay:atlassian-local
 curl -i http://127.0.0.1:18787/health
 ```
 
-The relay token file is ignored by Git and mounted directly **read-only** as `/run/secrets/relay_auth_token`; its value stays in a `0600` host file. Docker Compose file-based `secrets` cannot reliably remap UID/GID in this environment, so this direct bind avoids the failing secret mount. The trusted host file owner UID must match the container `node` UID (1000 in this pinned Node image). Confirm safely with `stat -c 'host uid=%u mode=%a' tools/local-oauth/.relay-token` and `id -u`; do not print its contents or make it world-readable. The bind explicitly sets `create_host_path: false` to avoid creating an empty directory if the token is missing. Stop it with `npm run relay:atlassian-local:stop`. Do not run a new interactive auth client concurrently with the relay. `/health` reports **liveness only**, not upstream authorization or Portal connectivity.
+The relay token file is ignored by Git and remains in the existing `0600` host file. Because the user's Docker daemon maps a host bind-mounted 0600 file to container UID 0, a network-disabled one-shot `relay-secret-init` stages the bearer to a private named Docker volume with UID 1000 and mode 0400. The long-running relay mounts that volume read-only at `/run/relay-secrets/token`. Never regenerate this token if the Worker may already rely on it. The trusted host file owner UID must match the container `node` UID (1000 in this pinned Node image). Confirm safely with `stat -c 'host uid=%u mode=%a' tools/local-oauth/.relay-token` and `id -u`; do not print its contents or make it world-readable. The bind explicitly sets `create_host_path: false` to avoid creating an empty directory if the token is missing. Stop it with `npm run relay:atlassian-local:stop`. Do not run a new interactive auth client concurrently with the relay. `/health` reports **liveness only**, not upstream authorization or Portal connectivity.
 
 ## 2. Cloudflare Tunnel and Access (manual, not executed)
 
