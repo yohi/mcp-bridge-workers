@@ -33,5 +33,37 @@ services:
       - /oauth/callback
       - --auth-timeout
       - "180"
+
+  # Run only after mcp-remote-client OAuth has populated the separate auth cache.
+  # Local listener is bound to loopback; cloudflared on this host publishes it.
+  relay:
+    profiles: [relay]
+    build:
+      context: ../..
+      dockerfile: tools/local-oauth/Dockerfile.mcp-remote
+    image: mcp-bridge-atlassian-auth:0.14.3
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m
+    volumes:
+      - atlassian-oauth-negotiated-cache:/home/node/.mcp-auth
+      - ../local-relay/server.mjs:/opt/mcp-relay/server.mjs:ro
+    secrets:
+      - relay_auth_token
+    environment:
+      MCP_REMOTE_CONFIG_DIR: /home/node/.mcp-auth
+      RELAY_SECRET_FILE: /run/secrets/relay_auth_token
+    entrypoint: ["node", "/opt/mcp-relay/server.mjs"]
+
 volumes:
   atlassian-oauth-negotiated-cache:
+
+secrets:
+  relay_auth_token:
+    file: ./.relay-token
