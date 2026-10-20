@@ -204,3 +204,24 @@ The user observed `initialize`, `notifications/initialized` and `tools/list` suc
 **Deploy is a separate, explicit operator step.** After the PR branch passes CI and the owner authorizes a Worker deployment, run `git pull`, `npm test`, `npm run deploy:atlassian` on the intended host/account and re-run Worker `tools/list`. Expect exactly four visible tool names, not 14. No secrets or Cloudflare resources are modified by this code commit.
 
 **Important:** `discover` and `executeRead` remain available. Their nested operation semantics have not been independently proved read-only, and a hidden tool is not proof of least-privilege OAuth scopes. Keep PR Draft / Portal onboarding gated on live verification and a separate decision about this residual risk.
+
+## 2026-10-20: Portal version-negotiation 403 — limited fix pending runtime verification
+
+An attempted Cloudflare MCP Portal registration failed after Bearer authentication succeeded:
+`HTTP 403`, `id=server-discover-probe-1`, `MCP method is not allowed`.
+Cloudflare's server API reported `authentication_status=connected` and
+`Version negotiation failed: the server denied access (HTTP 403)`.
+
+Current Portal clients may probe the newer 2026-07-28 MCP era using
+`server/discover` before falling back to the legacy 2025 `initialize`.
+The Worker rejects such a probe with 403 even though the upstream
+already proved the legacy `2025-03-26` flow works. The narrow correction
+returns a local authenticated `HTTP 200` JSON-RPC
+`{"jsonrpc":"2.0","id":"server-discover-probe-1","error":{"code":-32601,"message":"Method not found"}}`
+for the version probe. It does **not** implement the new era or open up
+any other MCP method or write/destructive tool.
+
+Operator next actions after CI: `git pull --ff-only`, `npm run deploy:atlassian`,
+retry MCP server connection/sync. Expect **Ready and four exposed tools**
+only if fallback succeeds; otherwise capture the exact new error for targeted
+fixing. Worker Secrets and local OAuth tokens must not be rotated for this issue.

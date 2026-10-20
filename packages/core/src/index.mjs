@@ -207,6 +207,18 @@ export function createMcpRelay(config) {
         let payload;
         try { payload = JSON.parse(new TextDecoder().decode(bytes)); }
         catch { return json({error:'invalid_json'},400); }
+        // MCP 2026-era clients probe server/discover before attempting the
+        // legacy 2025 initialize handshake. This bridge only implements
+        // legacy MCP: return a standard JSON-RPC Method not found response
+        // (HTTP 200) so clients can negotiate the supported older era.
+        // Never forward the probe to the OAuth-backed stdio relay, and never
+        // treat it as permission to invoke any additional MCP methods.
+        if (payload && typeof payload === 'object' && !Array.isArray(payload) &&
+            payload.jsonrpc === '2.0' && payload.method === 'server/discover' &&
+            (typeof payload.id === 'string' || typeof payload.id === 'number')) {
+          return json({jsonrpc:'2.0', id:payload.id,
+            error:{code:-32601, message:'Method not found'}});
+        }
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
             payload.jsonrpc !== '2.0' || !ALLOWED_METHODS.has(payload.method)) {
           return rpcError(payload,'MCP method is not allowed');

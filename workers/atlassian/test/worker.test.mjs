@@ -299,3 +299,75 @@ test('write/destructive tools/call rejected before Access tunnel request',async(
    }
  });
 });
+
+test('2026-07-28 server/discover probe reports legacy MCP support without HTTP auth denial', async () => {
+  const probe = {
+    jsonrpc:'2.0', id:'server-discover-probe-1', method:'server/discover',
+    params:{_meta:{
+      'io.modelcontextprotocol/protocolVersion':'2026-07-28',
+      'io.modelcontextprotocol/clientInfo':{name:'portal-probe',version:'1'},
+      'io.modelcontextprotocol/clientCapabilities':{},
+    }},
+  };
+  let fetchCount=0;
+  await withFetch(async () => { fetchCount++; throw Error('probe must not reach upstream'); }, async () => {
+    const response = await worker.fetch(request('POST',probe,{
+      ...auth,'mcp-method':'server/discover','mcp-protocol-version':'2026-07-28',
+      accept:'application/json, text/event-stream',
+    }),env);
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('content-type'),'application/json; charset=utf-8');
+    assert.deepEqual(await response.json(),{jsonrpc:'2.0',id:'server-discover-probe-1',
+      error:{code:-32601,message:'Method not found'}});
+    assert.equal(fetchCount,0);
+  });
+});
+
+test('legacy probe fallback preserves authentication, initialize and tool visibility',async()=>{
+  let upstreamCalls=0;
+  await withFetch(async(_,opts)=>{
+    upstreamCalls++;
+    const msg=JSON.parse(new TextDecoder().decode(opts.body));
+    if (msg.method==='initialize') {
+      return Response.json({jsonrpc:'2.0',id:msg.id,
+        result:{protocolVersion:'2025-03-26',capabilities:{tools:{}},
+          serverInfo:{name:'atlassian-mcp-server',version:'1.0.0'}}});
+    }
+    assert.equal(msg.method,'tools/list');
+    return Response.json({jsonrpc:'2.0',id:msg.id,
+      result:{tools:[{name:'executeWrite'},{name:'executeRead'},
+        {name:'executeDestructive'},{name:'discover'}]}});
+  },async()=>{
+    const probe=call('server/discover',{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}},
+      'server-discover-probe-1');
+    const denied=await worker.fetch(request('POST',probe),env);
+    assert.equal(denied.status,401);
+    const unsupported=await worker.fetch(request('POST',probe,auth),env);
+    assert.equal(unsupported.status,200);
+    assert.equal((await unsupported.json()).error.code,-32601);
+    const init=await worker.fetch(request('POST',call('initialize',
+      {protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'portal',version:'1'}},2),auth),env);
+    assert.equal((await init.json()).result.protocolVersion,'2025-03-26');
+    const list=await worker.fetch(request('POST',call('tools/list',{},3),auth),env);
+    assert.deepEqual((await list.json()).result.tools.map(t=>t.name),['executeRead','discover']);
+    const write=await worker.fetch(request('POST',call('tools/call',{name:'executeWrite'},4),auth),env);
+    assert.equal(write.status,403);
+    assert.equal(upstreamCalls,2);
+  });
+});
+
+test('non-probe unknown MCP methods remain forbidden, never forwarded',async()=>{
+  await withFetch(()=>{throw Error('unknown method forwarded')},async()=>{
+    for(const method of ['resources/list','prompts/list','server/discover-other']) {
+      const r=await worker.fetch(request('POST',call(method,{},11),auth),env);
+      assert.equal(r.status,403);
+      assert.equal((await r.json()).error.code,-32001);
+    }
+    const malformed=await worker.fetch(request('POST',{jsonrpc:'1.0',
+      method:'server/discover',id:1},auth),env);
+    assert.equal(malformed.status,403);
+    const notification=await worker.fetch(request('POST',{jsonrpc:'2.0',
+      method:'server/discover'},auth),env);
+    assert.equal(notification.status,403);
+  });
+});
