@@ -14,7 +14,7 @@ jobs:
         run: docker build -f tools/local-oauth/Dockerfile.mcp-remote -t mcp-bridge-atlassian-auth:0.14.3 .
       - name: Confirm bundled relay source is readable by non-root node
         run: >-
-          docker run --rm --entrypoint node mcp-bridge-atlassian-auth:ci
+          docker run --rm --entrypoint node mcp-bridge-atlassian-auth:0.14.3
           -e "const fs=require('node:fs');const f='/opt/mcp-relay/server.mjs';
           if(process.getuid()!==1000)process.exit(2);
           fs.accessSync(f,fs.constants.R_OK);
