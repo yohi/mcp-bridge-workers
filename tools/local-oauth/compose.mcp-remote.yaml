@@ -46,7 +46,7 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
-    cap_add: [CHOWN]
+    cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt:
       - no-new-privileges:true
     volumes:
@@ -63,8 +63,14 @@ services:
     command:
       - |
         set -eu
-        test -r /run/bootstrap/relay-token
-        test -f /run/bootstrap/relay-token
+        if ! test -r /run/bootstrap/relay-token; then
+          echo RELAY_SECRET_STAGE_FAILED: source_unreadable >&2
+          exit 1
+        fi
+        if ! test -f /run/bootstrap/relay-token; then
+          echo RELAY_SECRET_STAGE_FAILED: source_not_file >&2
+          exit 1
+        fi
         trap 'rm -f /run/relay-secrets/.token-next' EXIT
         install -o 1000 -g 1000 -m 0400 /run/bootstrap/relay-token /run/relay-secrets/.token-next
         mv -f /run/relay-secrets/.token-next /run/relay-secrets/token

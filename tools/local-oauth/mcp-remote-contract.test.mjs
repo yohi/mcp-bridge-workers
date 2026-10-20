@@ -53,7 +53,7 @@ test('localhost relay container shares only the new OAuth cache, uses userns-saf
   assert.match(compose,/source: relay-secret-storage\n\s+target: \/run\/relay-secrets\n\s+read_only: true/);
   assert.match(compose,/relay-secret-init:\n\s+condition: service_completed_successfully/);
   assert.match(compose,/network_mode: none/);
-  assert.match(compose,/cap_add: \[CHOWN\]/);
+  assert.match(compose,/cap_add: \[CHOWN, DAC_OVERRIDE\]/);
   assert.match(compose,/install -o 1000 -g 1000 -m 0400/);
   assert.match(compose,/RELAY_SECRET_STAGED_FOR_NODE/);
   assert.doesNotMatch(compose,/^\s+secrets:/m);
