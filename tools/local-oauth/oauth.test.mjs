@@ -123,3 +123,63 @@ test('callback checks exact state and discards code',()=>{
   assert.equal(classifyCallback('/callback?state=wrong&code=SECRET','right'),'invalid_callback');
   assert.equal(classifyCallback('/callback?state=right&error=denied','right'),'oauth_error');
 });
+
+import {validatePublicRegistration} from './registration-result.mjs';
+
+const callback='http://127.0.0.1:19091/callback';
+function registered(overrides={}) {
+  return {client_id:'test-id', redirect_uris:[callback],
+    token_endpoint_auth_method:'none', grant_types:['authorization_code'],
+    response_types:['code'], ...overrides};
+}
+
+test('public DCR may return an unused client secret; never return the secret',()=>{
+  const secret='VERY_SECRET_DO_NOT_ECHO';
+  const r=validatePublicRegistration(registered({client_secret:secret}),callback);
+  assert.equal(r.ok,true);
+  assert.equal(r.reason,'public_client_registration_accepted');
+  assert.equal(r.unexpected_client_secret_ignored,true);
+  assert.ok(!JSON.stringify(r).includes(secret));
+});
+
+test('public DCR without a secret is valid',()=>{
+  const r=validatePublicRegistration(registered(),callback);
+  assert.equal(r.ok,true);
+  assert.equal(r.unexpected_client_secret_ignored,false);
+});
+
+test('a different or missing loopback redirect fails closed',()=>{
+  for (const redirect_uris of [undefined,[],['http://localhost:19091/callback'],
+    ['http://127.0.0.1:19092/callback']]) {
+    const r=validatePublicRegistration(registered({redirect_uris}),callback);
+    assert.equal(r.ok,false);
+    assert.equal(r.reason,'registered_redirect_uri_mismatch');
+  }
+});
+
+test('registration must preserve token_endpoint_auth_method=none',()=>{
+  for(const token_endpoint_auth_method of [undefined,'client_secret_basic','client_secret_post']) {
+    const r=validatePublicRegistration(registered({token_endpoint_auth_method}),callback);
+    assert.equal(r.ok,false);
+    assert.equal(r.reason,'registered_client_auth_method_not_none');
+  }
+});
+
+test('registration requires an authorization-code-capable client',()=>{
+  for(const value of [
+    registered({client_id:null}),
+    registered({grant_types:['client_credentials']}),
+    registered({response_types:['token']}),
+  ]) {
+    assert.equal(validatePublicRegistration(value,callback).ok,false);
+  }
+});
+
+test('invalid DCR bodies are rejected without logging source data',()=>{
+  for (const obj of [null, undefined,[], 'garbled',42]) {
+    const result=validatePublicRegistration(obj,callback);
+    assert.equal(result.ok,false);
+    assert.deepEqual(Object.keys(result).sort(),
+      ['ok','reason','unexpected_client_secret_ignored'].sort());
+  }
+});

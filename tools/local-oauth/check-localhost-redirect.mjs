@@ -6,6 +6,7 @@
 import http from 'node:http';
 import {inspectDiscovery, BITBUCKET_READ_SCOPE} from './discovery.mjs';
 import {makeOAuthChallenge,makeAuthorizationUrl,classifyCallback} from './probe-core.mjs';
+import {validatePublicRegistration} from './registration-result.mjs';
 
 const args = process.argv.slice(2);
 if (!args.includes('--register')) {
@@ -75,13 +76,20 @@ try {
     process.exitCode=3;
   } else {
     const registered=await response.json();
-    if (typeof registered.client_id !== 'string' || !registered.client_id ||
-        (registered.redirect_uris && !registered.redirect_uris.includes(redirectUri)) ||
-        registered.client_secret) {
-      console.log('V2_DCR_INVALID_RESPONSE: exact callback registration not confirmed');
+    const validation = validatePublicRegistration(registered, redirectUri);
+    if (!validation.ok) {
+      // Do not print registered or any IDs, URLs, secrets, or raw response text.
+      // A successful HTTP response can already have created a DCR client.
+      console.log('V2_DCR_RESPONSE_NOT_ACCEPTED: ' + validation.reason);
+      console.log('DCR_MAY_HAVE_CREATED_CLIENT: do not retry registration without review.');
       process.exitCode=3;
     } else {
-      console.log('V2_DCR_ACCEPTED: registration response included a client ID.');
+      if (validation.unexpected_client_secret_ignored) {
+        // Atlassian may issue an unused client_secret even for method=none.
+        // It is not needed for PKCE and must never be persisted or printed.
+        console.log('V2_DCR_PUBLIC_CLIENT_SECRET_IGNORED');
+      }
+      console.log('V2_DCR_ACCEPTED: public client and exact callback verified.');
       console.log('Open the following URL in a LOCAL browser. Never share or log it.');
       console.log(makeAuthorizationUrl({
         endpoint:metadata.authorization_endpoint,clientId:registered.client_id,

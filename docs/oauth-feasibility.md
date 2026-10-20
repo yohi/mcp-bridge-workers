@@ -1,6 +1,6 @@
 # Atlassian Rovo MCP **v2** OAuth feasibility
 
-Status (2026-10-20 JST): **v2 protected-resource and Atlassian Identity authorization are NOT YET OBSERVED in this organization**. This project must NOT treat successful discovery of `https://mcp.atlassian.com/.well-known/oauth-authorization-server` as proof of v2 readiness.
+Status (2026-10-20 JST): **v2 protected-resource and Atlassian Identity authorization metadata confirmed by operator; DCR registration HTTP success but response classification pending after a strict-validation false negative**. This project must NOT treat successful discovery of `https://mcp.atlassian.com/.well-known/oauth-authorization-server` as proof of v2 readiness.
 
 ## Why the earlier v1 login was wrong
 
@@ -43,7 +43,7 @@ Expected fields for **successful metadata-only** evidence:
 }
 ```
 
-This is a sample of expected fields, **not a claim that this environment has returned them**. The full JSON contains the discovered tenant-scoped registration URL; avoid sharing any private organization details unnecessarily.
+The operator confirmed the v2 discovery fields on 2026-10-20. This is a representative subset, not a fresh authentication test. The full JSON contains the discovered tenant-scoped registration URL; avoid sharing any private organization details unnecessarily.
 
 If `result` is `not_proven` or Bitbucket scope is `not_proven`, STOP. Do not run the optional probe until the discrepancy is investigated. The CLI exits nonzero when protected-resource or issuer metadata fails.
 
@@ -64,12 +64,29 @@ The probe will:
 
 Only share a status such as `V2_DCR_ACCEPTED`, `V2_LOCALHOST_CALLBACK_CONFIRMED` or `V2_LOCALHOST_OAUTH_ERROR`. Do not paste the printed authorization URL, `state`, query-string `code`, IDs or tokens.
 
+## DCR HTTP success with \`V2_DCR_INVALID_RESPONSE\`
+
+The operator observed this status on 2026-10-20 after DCR returned a successful HTTP status. Because the old probe rejected the response when \`client_secret\` was present, this is **not evidence that Atlassian rejected localhost**, and the registration may have created a client. The response was not saved, so the exact failure condition cannot be reconstructed from the status alone.
+
+A third-party September 2026 report documented that Atlassian v2 returns a \`client_secret\` even when a DCR client is registered with \`token_endpoint_auth_method=none\`:
+https://github.com/QwenLM/qwen-code/issues/12165
+
+The patched probe accepts a DCR response only if:
+- \`client_id\` is a nonempty string;
+- \`redirect_uris\` contains the **exact** \`127.0.0.1\` loopback callback;
+- the **returned** \`token_endpoint_auth_method\` is literally \`none\`;
+- any returned grant/response type still allows \`authorization_code\` / \`code\`.
+
+A response \`client_secret\` is treated as an unusual Atlassian-specific extra field and **discarded**, never displayed, persisted or used. This is a metadata-only exception, not permission to handle confidential client credentials. The probe prints \`V2_DCR_PUBLIC_CLIENT_SECRET_IGNORED\` without the secret value. Unexpected method or redirect mismatch still stops the test and prints a sanitized reason.
+
+**Do not run repeated DCR registration just to diagnose the prior client.** The original script did not persist a client ID; it cannot resume an abandoned registration. If a subsequent single fresh registration is authorized, the patched probe will classify it safely.
+
 ## Gates not passed
 
 | Gate | State |
 |---|---|
-| Public v2 resource metadata in this environment | NOT TESTED WITH UPDATED SCRIPT |
-| Tenant-scoped DCR registration | NOT TESTED |
+| Public v2 resource metadata in this environment | VERIFIED_BY_OPERATOR (metadata only) |
+| Tenant-scoped DCR registration | HTTP_2XX_OBSERVED; valid public-client response NOT YET CONFIRMED |
 | Organization-specific localhost loopback and Bitbucket consent | NOT TESTED |
 | Token exchange and refresh | NOT IMPLEMENTED |
 | Safe localhost-to-Worker token handoff | NOT IMPLEMENTED |

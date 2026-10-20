@@ -28,3 +28,7 @@
 - Real MCP Portal / Worker / Rovo MCP interoperability, Workers Free CPU usage.
 
 The `/health` endpoint reports static status only; `/mcp` requires authorization. **No permission is granted by this PoC to connect company data or deploy.**
+
+## Atlassian DCR compatibility note
+
+Atlassian may issue an unexpected `client_secret` for a public client with `token_endpoint_auth_method=none`. The localhost callback-only probe ignores that field, never logs, stores or uses it, and requires a literal returned `none` authentication method and exact callback URI. Registration HTTP success can create a client even if validation stops later. See [OAuth runbook](oauth-feasibility.md). No tokens are exchanged.
