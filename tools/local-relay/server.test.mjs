@@ -49,8 +49,12 @@ test('reject unsupported JSON RPC methods and payloads',()=>serve(async({rpc,url
  assert.equal(rpc.calls.length,0);
 }));
 test('incoming caller credential or upstream URL cannot alter relay',()=>serve(async({rpc,url})=>{
- const r=await post(url+'?target=https://invalid.example',req('ping'),secret,
- {cookie:'sensitive','x-upstream-auth':'secret'});
+ const r=await fetch(url+'/mcp?target=https://invalid.example',{
+ method:'POST',
+ headers:{'content-type':'application/json',authorization:'Bearer '+secret,
+   cookie:'sensitive','x-upstream-auth':'secret'},
+ body:JSON.stringify(req('ping'))
+ });
  assert.equal(r.status,200);assert.equal(rpc.calls.length,1);
  assert.equal(rpc.calls[0].method,'ping');
 }));
