@@ -9,10 +9,17 @@
 - `tools/call` is gated by an explicit tool-name allowlist.
 - No real credentials are included in source code, test fixtures, or logs.
 
+## OAuth feasibility experiment (PR #2)
+
+- Metadata check: unauthenticated GET only, pinned Atlassian host, no redirects, no token access.
+- Optional localhost probe: requires explicit `--register`. It **creates a DCR client** at Atlassian, then optionally observes the browser redirect on loopback.
+- The localhost callback probe does **not** exchange, save, or forward authorization codes or tokens. Its status does not authorize Workers deployment.
+- See [OAuth feasibility protocol](oauth-feasibility.md) for state distinctions, safety requirements, and commands.
+
 ## NOT PROVEN / NOT IMPLEMENTED
 
 - Atlassian OAuth 2.1 PKCE with localhost redirect for the organization's tenant.
-- Local browser auth helper, secure Worker handoff, rotation, encrypted D1 store.
+- Local browser auth helper capable of token exchange, secure Worker handoff, rotation, encrypted D1 store.
 - Read-only safety of `executeRead` or any nested operation; name filtering is not an authorization proof.
 - `tools/list` is passed through and may advertise blocked tools.
 - Single upstream identity is reused for all Portal callers. **Restrict to one operator**. Multi-user support requires per-user isolation.

@@ -11,7 +11,8 @@
     "test": "node --test",
     "dev:atlassian": "npm run dev -w @mcp-bridge/atlassian",
     "deploy:atlassian": "npm run deploy -w @mcp-bridge/atlassian",
-    "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs"
+    "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs",
+    "probe:atlassian-localhost": "node tools/local-oauth/check-localhost-redirect.mjs --register"
   },
   "engines": {
     "node": ">=20"
