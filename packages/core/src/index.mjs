@@ -63,6 +63,7 @@ function getRoute(env,fixedUpstream) {
   try {
     url=new URL(env.LOCAL_RELAY_ORIGIN);
     if(url.protocol!=='https:'||!url.hostname.includes('.')||
+       /^\d+(?:\.\d+){3}$/.test(url.hostname)||url.hostname==='localhost'||
        url.username||url.password||url.search||url.hash||
        url.pathname!=='/'||url.port) return null;
   }catch{return null;}
