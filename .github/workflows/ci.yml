@@ -18,3 +18,5 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm test
+      - name: Validate local auth Compose configuration (no image build or OAuth)
+        run: docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile auth config --quiet
