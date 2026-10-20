@@ -1,0 +1,157 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import worker from '../src/index.mjs';
+
+const env = {
+  PORTAL_BEARER_TOKEN: 'p'.repeat(48),
+  UPSTREAM_AUTHORIZATION: 'Bearer ' + 'a'.repeat(48),
+};
+const request = (method, body, headers = {}) => new Request('https://bridge.example/mcp', {
+  method,
+  headers: {...(body ? {'content-type': 'application/json'} : {}), ...headers},
+  body: body && JSON.stringify(body),
+});
+const call = (method, params, id=1) => ({jsonrpc:'2.0', id, method, params});
+const auth = {authorization:'Bearer ' + env.PORTAL_BEARER_TOKEN};
+async function withFetch(fake, run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fake;
+  try { await run(); } finally { globalThis.fetch = original; }
+}
+
+test('health has no credentials or upstream connection claims', async () => {
+  const r = await worker.fetch(new Request('https://bridge.example/health'),env);
+  assert.equal(r.status,200);
+  assert.equal((await r.json()).upstreamConnection,'not_verified');
+});
+test('unauthorized requests fail closed before contacting upstream', async () => {
+  await withFetch(() => {throw Error('unexpected fetch')}, async () => {
+    const r = await worker.fetch(request('POST',call('initialize')),env);
+    assert.equal(r.status,401);
+  });
+});
+test('missing portal credential fails closed', async () => {
+  const r = await worker.fetch(request('POST',call('initialize'),auth),{
+    ...env,PORTAL_BEARER_TOKEN:'',
+  });
+  assert.equal(r.status,401);
+});
+test('missing upstream authorization fails closed', async () => {
+  const r = await worker.fetch(request('POST',call('initialize'),auth),{
+    ...env,UPSTREAM_AUTHORIZATION:'',
+  });
+  assert.equal(r.status,503);
+});
+test('forwards initialize to fixed origin and replaces authorization', async () => {
+  await withFetch(async (url, opts) => {
+    assert.equal(String(url),'https://mcp.atlassian.com/v2/mcp');
+    assert.equal(opts.headers.get('authorization'),env.UPSTREAM_AUTHORIZATION);
+    assert.equal(opts.headers.get('content-type'),'application/json');
+    assert.equal(opts.headers.get('cf-access-client-secret'),null);
+    assert.equal(JSON.parse(await new Response(opts.body).text()).method,'initialize');
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:1,result:{protocolVersion:'2025-03-26'}}),{
+      status:200,headers:{'content-type':'application/json','mcp-session-id':'test-session','set-cookie':'NO'},
+    });
+  },async () => {
+    const r = await worker.fetch(request('POST',call('initialize'),{
+      ...auth,'cf-access-client-secret':'SENSITIVE',
+    }),env);
+    assert.equal(r.status,200);
+    assert.equal(r.headers.get('mcp-session-id'),'test-session');
+    assert.equal(r.headers.get('set-cookie'),null);
+  });
+});
+test('allowed tool relayed; write and unknown tool names blocked', async () => {
+  await withFetch(async () => new Response('ok',{headers:{'content-type':'application/json'}}),async () => {
+    const allowed = await worker.fetch(request('POST',call('tools/call',{name:'executeRead'}),auth),env);
+    assert.equal(allowed.status,200);
+    for (const name of ['executeWrite','executeDestructive','unknown']) {
+      const denied = await worker.fetch(request('POST',call('tools/call',{name}),auth),env);
+      assert.equal(denied.status,403);
+    }
+  });
+});
+test('rejects invalid JSON-RPC payloads and unsupported methods', async () => {
+  assert.equal((await worker.fetch(request('POST',{oops:true},auth),env)).status,403);
+  assert.equal((await worker.fetch(request('POST',[call('initialize')],auth),env)).status,403);
+  assert.equal((await worker.fetch(new Request('https://bridge.example/mcp',{
+    method:'PUT',headers:auth,
+  }),env)).status,405);
+  assert.equal((await worker.fetch(new Request('https://bridge.example/private',{
+    headers:auth,
+  }),env)).status,404);
+});
+test('upstream 401 does not become an OAuth challenge to Portal',async () => {
+  await withFetch(async () => new Response('secret',{
+    status:401, headers:{'www-authenticate':'Bearer realm="upstream"'},
+  }),async () => {
+    const r = await worker.fetch(request('POST',call('tools/list'),auth),env);
+    assert.equal(r.status,502);
+    assert.equal(r.headers.get('www-authenticate'),null);
+    assert.equal((await r.json()).error,'upstream_authorization_failed');
+  });
+});
+test('SSE GET remains streaming; only allowlisted headers are returned',async () => {
+  await withFetch(async (url,opts) => {
+    assert.equal(opts.method,'GET');
+    assert.equal(opts.headers.get('mcp-session-id'),'s123');
+    return new Response('event: message\ndata: hi\n\n',{
+      headers:{'content-type':'text/event-stream','set-cookie':'X'},
+    });
+  },async () => {
+    const r = await worker.fetch(new Request('https://bridge.example/mcp',{
+      headers:{...auth,'mcp-session-id':'s123',accept:'text/event-stream'},
+    }),env);
+    assert.equal(r.status,200);
+    assert.equal(r.headers.get('content-type'),'text/event-stream');
+    assert.equal(r.headers.get('set-cookie'),null);
+  });
+});
+test('refuses unexpected upstream redirects',async () => {
+  await withFetch(async () => new Response('',{
+    status:302,headers:{location:'https://evil.example/steal'},
+  }),async () => {
+    const r = await worker.fetch(request('POST',call('initialize'),auth),env);
+    assert.equal(r.status,502);
+    assert.equal(r.headers.get('location'),null);
+  });
+});
+test('rejects oversized JSON without contacting upstream',async () => {
+  await withFetch(async () => {throw Error('should not fetch')},async () => {
+    const r = await worker.fetch(request('POST',call('tools/list',{padding:'x'.repeat(262_145)}),auth),env);
+    assert.equal(r.status,413);
+  });
+});
+test('caller query parameters cannot affect upstream URL',async () => {
+  await withFetch(async (url) => {
+    assert.equal(String(url),'https://mcp.atlassian.com/v2/mcp');
+    return new Response('{}',{headers:{'content-type':'application/json'}});
+  },async () => {
+    const r = await worker.fetch(new Request('https://bridge.example/mcp?tools=all&target=https://evil.example',{
+      method:'POST',headers:{...auth,'content-type':'application/json'},
+      body:JSON.stringify(call('ping')),
+    }),env);
+    assert.equal(r.status,200);
+  });
+});
+test('caller cookies and non-allowlisted headers are not forwarded',async () => {
+  await withFetch(async (_,opts) => {
+    assert.equal(opts.headers.get('cookie'),null);
+    assert.equal(opts.headers.get('x-secret'),null);
+    assert.equal(opts.headers.get('authorization'),env.UPSTREAM_AUTHORIZATION);
+    return new Response('{}',{headers:{'content-type':'application/json'}});
+  },async () => {
+    const r = await worker.fetch(request('POST',call('ping'),{
+      ...auth,cookie:'secret','x-secret':'secret',
+    }),env);
+    assert.equal(r.status,200);
+  });
+});
+test('wrong Portal bearer token does not contact upstream',async () => {
+  await withFetch(() => {throw Error('upstream should not be contacted')},async () => {
+    const r = await worker.fetch(request('POST',call('ping'),{
+      authorization:'Bearer ' + 'a'.repeat(48),
+    }),env);
+    assert.equal(r.status,401);
+  });
+});

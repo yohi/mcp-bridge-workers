@@ -1,0 +1,19 @@
+{
+  "name": "mcp-bridge-workers",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "dev:atlassian": "npm run dev -w @mcp-bridge/atlassian",
+    "deploy:atlassian": "npm run deploy -w @mcp-bridge/atlassian",
+    "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
