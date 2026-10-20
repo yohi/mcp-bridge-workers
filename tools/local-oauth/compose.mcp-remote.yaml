@@ -53,7 +53,6 @@ services:
       - /tmp:rw,nosuid,nodev,size=32m
     volumes:
       - atlassian-oauth-negotiated-cache:/home/node/.mcp-auth
-      - ../local-relay/server.mjs:/opt/mcp-relay/server.mjs:ro
       # File-backed Compose secrets cannot remap uid/gid; direct read-only bind
       # preserves the host file owner (0600, expected Linux UID 1000=node).
       - type: bind

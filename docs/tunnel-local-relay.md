@@ -90,3 +90,25 @@ curl -i http://127.0.0.1:18787/health
 ```
 
 If it still fails, use `docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay logs --tail=30 relay` and share **only non-secret diagnostic codes**. Missing or unreadable files are a local host permissions problem; resolve ownership instead of widening permissions.
+
+## Fix: `EACCES` loading `/opt/mcp-relay/server.mjs` (2026-10-20)
+
+The operator observed `Restarting (1)` and a Node.js `EACCES open /opt/mcp-relay/server.mjs`. This is **source bind-mount permission failure**, separate from the earlier private relay bearer issue. In particular, `umask 077` in an interactive Linux shell can result in new Git checkout files being inaccessible to container UID 1000. We now **COPY** `tools/local-relay/server.mjs` into the Docker image with non-root ownership and image-local mode `0444`. The host source file is no longer bind-mounted. The OAuth volume and relay bearer host file remain unchanged; there is no reason to chmod the host source tree or regenerate any token.
+
+A default-deny `.dockerignore` prevents the `.relay-token`, `.env` files and other working-tree content from being sent to the build context; only the Dockerfile and relay source are included. CI now builds the image and verifies that the non-root runtime can read the packaged source. GitHub Actions success is not a substitute for testing the actual user's Docker host.
+
+```bash
+cd ~/program/private/mcp-bridge-workers
+git pull
+
+# REQUIRED: a plain `up -d --force-recreate` does NOT rebuild the Docker image.
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml \\
+  --profile relay up -d --build --force-recreate relay
+
+# Inspect only status and local liveness. No credentials are printed.
+docker compose -f tools/local-oauth/compose.mcp-remote.yaml \\
+  --profile relay ps -a
+curl -i http://127.0.0.1:18787/health
+```
+
+If this returns another `Restarting`, inspect `logs --tail=30 relay`. If you see `MCP_RELAY_STARTUP_FAILED: secret_not_readable`, the *separate* bearer file is still not readable; check its host UID and the container's effective UID, without changing its mode or revealing its contents. Avoid `docker compose down -v` because it would remove the successful OAuth volume.

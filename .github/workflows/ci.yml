@@ -6,6 +6,20 @@ on:
 permissions:
   contents: read
 jobs:
+  image-readability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build local OAuth and MCP relay image (no OAuth or secret access)
+        run: docker build -f tools/local-oauth/Dockerfile.mcp-remote -t mcp-bridge-atlassian-auth:ci .
+      - name: Confirm bundled relay source is readable by non-root node
+        run: >-
+          docker run --rm --entrypoint node mcp-bridge-atlassian-auth:ci
+          -e "const fs=require('node:fs');const f='/opt/mcp-relay/server.mjs';
+          if(process.getuid()!==1000)process.exit(2);
+          fs.accessSync(f,fs.constants.R_OK);
+          if(!fs.readFileSync(f,'utf8').includes('makeHandler'))process.exit(3);
+          process.stdout.write('packaged_relay_readable_nonroot\\n')"
   test:
     runs-on: ubuntu-latest
     strategy:

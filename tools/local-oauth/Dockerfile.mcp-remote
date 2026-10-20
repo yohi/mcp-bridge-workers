@@ -8,7 +8,12 @@ RUN apt-get update \
 RUN npm install --global --omit=dev mcp-remote@0.14.3 \
     && npm cache clean --force
 RUN install -d -m 0700 -o node -g node /home/node/.mcp-auth \
-    && install -d -m 0755 /etc/mcp-bridge
+    && install -d -m 0755 /etc/mcp-bridge \
+    && install -d -m 0755 -o node -g node /opt/mcp-relay
+# Package the public relay source into the image so shell umask / host bind
+# ownership cannot make server.mjs unreadable to the non-root node process.
+COPY --chown=node:node tools/local-relay/server.mjs /opt/mcp-relay/server.mjs
+RUN chmod 0444 /opt/mcp-relay/server.mjs
 USER node
 ENV MCP_REMOTE_CONFIG_DIR=/home/node/.mcp-auth
 ENTRYPOINT ["mcp-remote-client"]

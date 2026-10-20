@@ -43,7 +43,10 @@ test('new negotiated-scope cache is separate from failed Bridge and existing Cha
 test('localhost relay container shares only the new OAuth cache, uses file-backed bearer and loopback listener',()=>{
   assert.match(compose,/profiles: \[relay\]/);
   assert.match(compose,/entrypoint: \["node", "\/opt\/mcp-relay\/server\.mjs"\]/);
-  assert.match(compose,/\.\.\/local-relay\/server\.mjs:\/opt\/mcp-relay\/server\.mjs:ro/);
+  assert.doesNotMatch(compose,/\.\.\/local-relay\/server\.mjs:\/opt\/mcp-relay\/server\.mjs/);
+  assert.match(image,/COPY --chown=node:node tools\/local-relay\/server\.mjs \/opt\/mcp-relay\/server\.mjs/);
+  assert.match(image,/RUN chmod 0444 \/opt\/mcp-relay\/server\.mjs/);
+  assert.match(image,/install -d -m 0755 -o node -g node \/opt\/mcp-relay/);
   assert.match(compose,/RELAY_SECRET_FILE: \/run\/secrets\/relay_auth_token/);
   assert.match(compose,/source: \.\/\.relay-token/);
   assert.match(compose,/target: \/run\/secrets\/relay_auth_token/);
@@ -51,4 +54,13 @@ test('localhost relay container shares only the new OAuth cache, uses file-backe
   assert.doesNotMatch(compose,/^\s+secrets:/m);
   assert.match(compose,/atlassian-oauth-negotiated-cache:\/home\/node\/\.mcp-auth/);
   assert.doesNotMatch(compose,/atlassian-oauth-cache:\/home\/node\/\.mcp-auth/);
+});
+
+
+test('Docker build context explicitly excludes local credential files',()=>{
+  const ignore=read('../../.dockerignore');
+  assert.match(ignore,/^\*\*$/m);
+  assert.match(ignore,/^!tools\/local-relay\/server\.mjs$/m);
+  assert.match(ignore,/^!tools\/local-oauth\/Dockerfile\.mcp-remote$/m);
+  assert.doesNotMatch(ignore,/^!tools\/local-oauth\/\.relay-token$/m);
 });
