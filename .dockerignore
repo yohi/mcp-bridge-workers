@@ -1,0 +1,8 @@
+# Default-deny build context: only the relay code and this Dockerfile are needed.
+# In particular, NEVER send tools/local-oauth/.relay-token or other secrets.
+**
+!tools/
+!tools/local-oauth/
+!tools/local-oauth/Dockerfile.mcp-remote
+!tools/local-relay/
+!tools/local-relay/server.mjs

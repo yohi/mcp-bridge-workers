@@ -11,7 +11,14 @@
     "test": "node --test",
     "dev:atlassian": "npm run dev -w @mcp-bridge/atlassian",
     "deploy:atlassian": "npm run deploy -w @mcp-bridge/atlassian",
-    "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs"
+    "check:atlassian-oauth": "node tools/local-oauth/check-oauth-discovery.mjs",
+    "auth:atlassian-local:build": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile auth build auth",
+    "auth:atlassian-local": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile auth run --rm auth",
+    "relay:atlassian-local": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay up -d relay",
+    "relay:atlassian-local:stop": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile relay stop relay",
+    "tunnel:cloudflare-local": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel up -d cloudflared",
+    "tunnel:cloudflare-local:stop": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel stop cloudflared",
+    "tunnel:cloudflare-local:status": "docker compose -f tools/local-oauth/compose.mcp-remote.yaml --profile tunnel ps -a"
   },
   "engines": {
     "node": ">=20"

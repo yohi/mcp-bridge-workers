@@ -1,31 +1,53 @@
 # MCP Bridge Workers
 
-Reusable, **experimental** Streamable HTTP bridges from Cloudflare MCP Portal to remote MCP providers, deployed as separate Cloudflare Workers sharing a small core library. **Not production-ready.**
+Experimental, single-owner Atlassian Rovo MCP bridge using Cloudflare MCP Portal and Cloudflare Workers. This repository contains an **operator-deployed working VPC transport**, plus historical OAuth feasibility experiments. It is **not certified as a general-purpose read-only Atlassian proxy**.
+
+## Current architecture (verified 2026-10-21 JST)
 
 ```text
-ChatGPT / OpenCode --> Cloudflare MCP Portal --> Worker (per provider)
-                                              --> Remote MCP server
+ChatGPT (single authorized caller)
+  -> Cloudflare MCP Portal (CodeMode)
+  -> atlassian-rovo-mcp-bridge Worker (/mcp, Portal Bearer)
+  -> Workers VPC Service Binding ATLASSIAN_RELAY_VPC
+  -> Cloudflare Tunnel CoreUltra7-270K (QUIC)
+  -> http://127.0.0.1:18787/mcp (independent Relay Bearer)
+  -> local Docker relay -> mcp-remote@0.14.3
+  -> Atlassian Rovo MCP v2 (OAuth cache kept in a local Docker volume)
 ```
 
-## Structure
+The VPC Service `atlassian-relay-private` connects to the existing Tunnel and fixed local endpoint. Cloudflare Free and zone-level Bot Fight Mode remain in use. **No public-hostname bypass, WAF exception, Gateway routing change, or token migration** was necessary. The pre-existing public Access-protected hostname remains configured, but the current production `/mcp` Worker route uses the private VPC Binding.
 
-- `packages/core` — shared MCP relay transport and request checks
-- `workers/atlassian` — first provider adapter: Atlassian Rovo MCP
-- `tools/local-oauth` — metadata-only discovery; local login not implemented
-- `docs` — architecture and security limitations
+Runtime evidence: the owner obtained HTTP 200 JSON-RPC results over VPC for both `ping` and `getAccessibleAtlassianResources`. Subsequently ChatGPT Portal CodeMode successfully called `getAccessibleAtlassianResources({})` without the earlier HTTP 502. This demonstrates connectivity for that read-only operation; it does **not** establish general write-prevention, full MCP sessions, or all Atlassian permissions.
 
-## Validate locally (Node.js >=20)
+## Safe operation and security gates
 
-```bash
-npm install
+- Portal-to-Worker Bearer validation is mandatory for `/mcp`; relay has its own independent Bearer. Keep both secrets out of Git, logs, chat, and CLI arguments.
+- `tools/list` is filtered and `tools/call` is authorized by the **same top-level allowlist**. `executeWrite` and `executeDestructive` are blocked before upstream.
+- **PR #2 cleanup (not live until separately deployed):** unverified nested `discover` and `executeRead` are **default-denied**, including in tool discovery. `ATLASSIAN_UNVERIFIED_READ_TOOLS=off` is the supported safety baseline. Only set `on` after independent review of the exact nested operation contract and effective authorization. Enabling it is not proof of safe read-only behavior.
+- The latest cleanup removes the temporary `/mcp/vpc` test endpoint and Cloudflare challenge-body diagnostic. `GET /health/vpc` remains as a Portal-Bearer-protected network liveness check.
+- `ATLASSIAN_UPSTREAM_MODE=local_relay_vpc` is the supported active mode. VPC failures **fail closed** without automatic fallback to the public hostname.
+- The local mcp-remote OAuth negotiation may grant scopes beyond Bitbucket Read. This is a **single-user experimental bridge**, not a per-user delegated authorization solution.
+
+See [Security](docs/security.md), [Architecture](docs/architecture.md), and [Operator runbook](docs/vpc-mcp-cutover-2026-10-21.md). Historical OAuth/DCR investigations are preserved in [OAuth feasibility](docs/oauth-feasibility.md) and [local OAuth adoption](docs/mcp-remote-auth-adoption.md).
+
+## Repository
+
+- `packages/core`: stateless HTTP MCP gateway, request checks and filtering
+- `workers/atlassian`: Atlassian Worker and Wrangler configuration
+- `tools/local-relay`: loopback-only HTTP-to-stdio relay
+- `tools/local-oauth`: Docker OAuth client, Tunnel connector, offline inspection utilities
+- `docs`: architecture, security, incident evidence and operator runbooks
+
+## Validate and deploy (operator only)
+
+```sh
+git status --short
+npm install --ignore-scripts --no-audit --no-fund
 npm test
-npm run check:atlassian-oauth  # optional network read; no authentication
+# After reviewing the diff and confirming the destination account:
+npm run deploy:atlassian
 ```
 
-Never commit credentials or secrets. The Worker requires two independent secrets: `PORTAL_BEARER_TOKEN` for Portal-to-Worker traffic, and `UPSTREAM_AUTHORIZATION` for the upstream Rovo MCP endpoint. Neither is configured by this repository or CI.
+Do **not** run a deployment or overwrite local uncommitted changes solely to close a PR. Docker profiles for relay and Tunnel are independently opt-in; do not run `docker compose down -v`, regenerate saved secrets, or perform a new Atlassian DCR/OAuth consent flow for ordinary Worker maintenance.
 
-## Deployment (NOT performed; review first)
-
-A dedicated Worker can be deployed via `npm run deploy:atlassian` after review. Restrict the MCP Portal mapping to **one user**. This version neither refreshes upstream credentials nor implements localhost OAuth or secure token handoff.
-
-Read [architecture](docs/architecture.md) and [security gates](docs/security.md) before any deployment. Live Atlassian integration and production use are out of scope for this PoC.
+PR #2 remains **Draft until the cleanup commit is deployed and its reduced tool visibility is confirmed**. Its earlier production-connectivity success applies to the VPC cutover baseline, not automatically to later cleanup changes.

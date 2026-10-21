@@ -5,6 +5,17 @@
   "compatibility_date": "2026-10-20",
   "workers_dev": true,
   "observability": {
-    "enabled": false
+    "enabled": true
+  },
+  "vpc_services": [
+    {
+      "binding": "ATLASSIAN_RELAY_VPC",
+      "service_id": "01a15cd4-afbd-7e03-912e-22db7b459014",
+      "remote": true
+    }
+  ],
+  "vars": {
+    "ATLASSIAN_UPSTREAM_MODE": "local_relay_vpc",
+    "ATLASSIAN_UNVERIFIED_READ_TOOLS": "off"
   }
 }
