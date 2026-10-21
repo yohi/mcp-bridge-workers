@@ -1,9 +1,9 @@
-# PR #3 — Bitbucket repository-list operation enforcement (Design R2)
+# PR #3 — Bitbucket repository-list operation enforcement (Design R2.1)
 
-**Status:** DESIGN_R2_PROPOSAL / DESIGN_APPROVAL_PENDING / IMPLEMENTATION_NOT_AUTHORIZED / DEPLOYMENT_NOT_AUTHORIZED  
-**Scope:** R1 document-only revision; no source/test/config/CI changes.  
+**Status:** DESIGN_R2_1_PROPOSAL / DESIGN_APPROVAL_PENDING / IMPLEMENTATION_NOT_AUTHORIZED / DEPLOYMENT_NOT_AUTHORIZED  
+**Scope:** R2 → R2.1 limited revision of this document only; no source/test/config/CI changes.  
 **Repository/PR:** `yohi/mcp-bridge-workers` / [#3](https://github.com/yohi/mcp-bridge-workers/pull/3), Draft.  
-**Immutable review base:** `master` = `5f88fcf47b85e1c102ef9c5deb2a6d67181c3ba7`; reviewed R1 HEAD = `1ee110f8fb926743fc9ddefa562c8a3d170d09d0`.  
+**Immutable review base:** `master` = `5f88fcf47b85e1c102ef9c5deb2a6d67181c3ba7`; reviewed R1 HEAD = `1ee110f8fb926743fc9ddefa562c8a3d170d09d0`; reviewed R2 HEAD = `6f0e3db970bc1917990c9e4f9b62ce0de85d3d65`.  
 **Date:** 2026-10-21 JST.
 
 ## 1. Objective and immutable safety invariants
@@ -57,7 +57,18 @@ No `E-03` / `E-07` / `E-08` / `E-09` evidence is promoted to proven by this revi
 
 ~~~ts
 type ExternalEmptyArguments = Record<never, never>;  // runtime check, not TS typing alone
-type ApprovedWorkspace = string;  // exact non-empty reviewed slug; no fallback
+type ApprovedWorkspace = string;  // G2-approved literal; strict allowlist validation
+interface OwnerWorkspaceApproval {
+  readonly slug: ApprovedWorkspace;       // compiled Worker literal after G2
+  readonly ownerDecisionRef: string;       // permalink to approved immutable decision commit
+  readonly ownerDecisionSha256: string;    // hex digest of the reviewed decision bytes
+}
+// Runtime Worker env holds BITBUCKET_WORKSPACE_SLUG independently;
+// both values are required, never derived from caller arguments or each other.
+interface WorkspaceBinding {
+  readonly approved: Readonly<OwnerWorkspaceApproval>;
+  readonly envKey: "BITBUCKET_WORKSPACE_SLUG";
+}
 type G1PinnedInputs = unknown;     // P-01: replace with evidence-pinned exact type before G4
 type G1PinnedToolResult = unknown; // P-02: replace with exact observed MCP result variant before G4
 
@@ -81,6 +92,7 @@ interface VirtualToolSpec {
   };
   internalToolName: "executeRead";
   internalOperationName: "listBitbucketRepositories";
+  workspaceBinding: Readonly<WorkspaceBinding>;
   buildInputs: (ctx: Readonly<{workspace: ApprovedWorkspace}>) => G1PinnedInputs;
   // Decoder MUST verify the pinned Rovo result variant before returning a page.
   normalize: (result: G1PinnedToolResult, ctx: Readonly<{workspace: ApprovedWorkspace}>)
@@ -96,6 +108,8 @@ createMcpRelay({
 
 `virtualTool` is an **in-process immutable description**, not an arbitrary remote plugin or callback supplied by a request. Core must validate that this slot is defined **once**, `publicName` does not collide with an upstream/existing metadata tool, and the internal tool/operation literals match the pinned approved contract. No dynamic tool registration, arbitrary handler lists or provider-controlled direct `fetch` callback is permitted.
 
+**Owner approval is not established by a hash alone.** Core validates byte-for-byte equality of the approved literal and runtime binding; a separate offline review/CI check must verify that `ownerDecisionRef` resolves to the G2 Owner-approved immutable record and that `ownerDecisionSha256` matches that record. An unreviewed Worker source change to `approved.slug` is not authorized merely because its paired runtime setting was edited. The owner approval record does **not exist yet**; creating one belongs to a later separately authorized stage, never this R2.1 edit.
+
 **Pending type freeze:** `unknown` placeholders `G1PinnedInputs` and `G1PinnedToolResult` mean **the interface is not implementable yet**. G1 must capture and replace them with literal, exact property/type shapes and decoding rules in a separately reviewed **Design R2 contract-completion revision** before G4. Implementers must not choose structures by guesswork.
 
 ### 3.3 Deterministic dispatch pipeline
@@ -104,10 +118,25 @@ createMcpRelay({
 2. If `tools/list`: forward through existing VPC route; run current bounded JSON-only `filteredToolListResponse`, preserving base top-level metadata allowlist and pagination; **after successful full validation**, if and only if this is the **first page** (no `params.cursor`, with `params` absent or empty), append one static virtual-tool descriptor. If existing filtered or unfiltered upstream list already includes the virtual name, fail closed (`VIRTUAL_CONTRACT_MISMATCH`), never append duplicates. Do not append on cursor pages. Retain upstream `nextCursor` unchanged if valid; no in-band permission increase from pagination. Do not expose the virtual name in failed/invalid list responses. On any unexpected `tools/list` request shape that would make "first page" ambiguous, reject rather than guess.
 3. If `tools/call`: test requested `params.name` **against the already-approved public metadata names OR the single virtual publicName only**. Any direct `executeRead`/`discover`/write/destructive call fails at the existing outer 403 boundary without contacting upstream. A virtual name is not inserted into the existing generic `permittedTools` set.
 4. For the virtual name, Core requires exactly the two `params` fields `name` and `arguments`; `arguments` must be a non-array plain object with **zero own keys**. Any missing, null, extra fields, workspace override, `_meta`, or extra argument is rejected **before transport**. If a Portal client necessarily adds an extra field, that is a G1 contract issue; do not silently relax validation.
-5. Core validates the configured workspace is one previously reviewed fixed slug and that `ATLASSIAN_UNVERIFIED_READ_TOOLS === "off"`. Any missing/unknown workspace or conflicting runtime mode fails closed. Core calls the Worker-owned `buildInputs({workspace})` with **trusted config only**, which must produce the G1-frozen keys/values; no request body or caller-controlled header enters this builder.
+5. Core checks the `virtualTool.workspaceBinding` at every virtual `tools/call` and before virtual `tools/list` advertisement: (a) compiled approved slug + nonempty immutable Owner decision reference and 64-digit lowercase SHA-256 of that decision; (b) `env.BITBUCKET_WORKSPACE_SLUG` present as a string with **no fallback**; (c) both slugs satisfy the fixed conservative ASCII policy and compare **exactly** (same case and bytes, no trimming, decoding, case folding, prefix matching or aliases); (d) `ATLASSIAN_UNVERIFIED_READ_TOOLS === "off"` and `ATLASSIAN_UPSTREAM_MODE === "local_relay_vpc"`. Any failed guard means no virtual dispatch, no virtual tool advertisement, and `-32050` on a direct virtual call; existing metadata tools remain on their original routes. After this guard, Core calls Worker-owned `buildInputs({workspace: approved.slug})` using only the approved literal. No caller body/header or unchecked runtime string reaches the mapper. Core never trusts a Worker-supplied "already validated" flag.
 6. Core builds the **sole** internal request with `method="tools/call"` and `params.name="executeRead"`. The internal request can only be emitted by this code branch, never recursively passed through the external tool-authorization dispatcher. In a dedicated internal dispatch path, it invokes the **same Core fetch/authorization-header creation and existing VPC Service Binding**, using `LOCAL_RELAY_BEARER_TOKEN`. It does **not** set `ATLASSIAN_UNVERIFIED_READ_TOOLS=on`, modify `permittedTools` or add an external generic `executeRead` permission.
 7. Core consumes the internal reply under explicit byte/time budgets, validates HTTP status and the JSON-RPC envelope/ID, then hands only the validated G1 result representation to the Worker normalizer. Normalizer emits `RepositoryPageV1` or a fixed classified failure; Core checks output schema/size and constructs the sanitized MCP `CallToolResult`. Original Rovo content and secret-bearing headers are never returned.
 8. Legacy `initialize`, `notifications/*`, `ping`, existing two metadata `tools/call`, existing 401/403 handling and `/health/vpc` do not take the virtual path. `GET` and `DELETE` remain on the current implementation path; no new virtual invocation from them.
+
+
+### 3.4 R2.1 fixed-workspace supply, validation and approval lifecycle (R1-FND-001)
+
+**Single authoritative binding design:** The G2 Owner decision is recorded in a reviewed, immutable-commit Git governance decision artifact (an exact commit-pinned permalink, not a mutable branch URL). The approved `slug` and the SHA-256 of the exact decision bytes are pinned as **literal constants in the Atlassian Worker source** under `virtualTool.workspaceBinding.approved`. These constants are **not populated from environment variables**. Separately, a required Worker **plain-text runtime variable** `BITBUCKET_WORKSPACE_SLUG` supplies the deployed configuration value. Both are absent/unapproved today; **do not add them to source, Wrangler or Cloudflare during this document-only revision**.
+
+The sole Core interface is `virtualTool.workspaceBinding: {approved:{slug,ownerDecisionRef,ownerDecisionSha256},envKey:"BITBUCKET_WORKSPACE_SLUG"}`. Core reads `env.BITBUCKET_WORKSPACE_SLUG` itself **inside the authorized route**, not through a caller-selected key; `envKey` must exactly equal its single allowed literal. It validates both slug strings against an **application-local conservative syntax** `^[a-z0-9][a-z0-9_-]{0,62}$` (ASCII only, no whitespace or decoding; **not an assertion about all Bitbucket-legal slug forms**), rejects invalid approval reference/digest shape, and compares the slugs by strict `===` equality. No missing-variable default, substitution with `diamondhead`, reflected caller value or permissive match. If the Owner-approved workspace cannot fit this syntax, revise the design and re-review before G2/I-AUTH; do not silently normalize.
+
+- **At design/G2:** Human Owner approves one slug and the record's exact version/hash. Reviewer/CI must match the source-pinned literal/ref/hash against that independent Owner decision record. Merely setting both values to the same string is **not** proof of Owner approval.
+- **At future deployment:** The deployment reviewer confirms `env.BITBUCKET_WORKSPACE_SLUG` exactly equals the compiled approved literal. Cloudflare Dashboard or Wrangler edits to the runtime binding cannot authorize a new workspace by themselves.
+- **At every virtual request:** Core independently rechecks approved-literal/config equality, local syntax, `off` flag and VPC mode before any upstream request; invalid/missing/mismatched binding produces `HTTP 503 / JSON-RPC -32050` and **zero VPC calls**. For `tools/list`, retain existing metadata tools but do not append the virtual tool while invalid; never claim virtual capability is ready.
+- **Any workspace, decision reference/digest, source-pinned approval, runtime binding or org linkage change:** revoke the prior design's authorization applicability, require a **new Owner decision** and immutable evidence ref/hash, independent review, fresh tests and explicit redeployment authorization. Until synchronized and approved, keep the virtual tool disabled. This is release governance plus runtime drift detection; the decision ref/hash is **not** an online signature or a runtime lookup of GitHub.
+- **Cancellation/revocation:** immediately disable the virtual tool via an approved fail-closed operational action; do not interpret an existing compiled literal as continuing authorization after revocation. The system currently has no automatic real-time revocation watcher; that residual limitation must be resolved operationally prior to any live rollout.
+
+**Hard stop P-03 remains:** `diamondhead` is merely a candidate; no Owner decision, exact slug, evidence artifact or real Cloudflare setting is created by R2.1. The type shape is frozen but the actual values are **PENDING G2**.
 
 ## 4. R1-FND-002: external and internal contracts
 
@@ -234,16 +263,59 @@ For a virtual failure, return only `{jsonrpc:"2.0", id, error:{code,message}}` w
 
 **P-04:** Rovo error representation is not yet known. Permission-denied mapping `-32052` MUST stay disabled until exact reviewed evidence distinguishes it from generic or transport errors. Unknown responses use `-32054` or `-32055` as appropriate; no heuristic matching of raw text.
 
+
+### 4.6 R2.1 G1 evidence acquisition and decision rule (R1-FND-002)
+
+**Permissible evidence tiers (do not conflate):**
+
+- **S — Static/contract evidence:** version- and hash-pinned Atlassian official documentation, machine-readable tool descriptor/OpenAPI/source at a reviewed exact revision, plus derivation notes. Can establish *advertised types/declared behavior*, but **cannot by itself prove runtime output, workspace isolation or observed errors**.
+- **H — Historic execution evidence:** a pre-existing, **separately authorized**, traceable, redacted fixture or observation: source version, timestamp, authenticated principal classification, exact requested operation/workspace classification, full response *shape* and status without tokens or private repository details, independent hash and testable provenance. A verbal success report or synthetic mock is not H.
+- **L — New controlled runtime evidence:** a separately approved future operation test with Owner authorization, least privilege, bounded scope, sanitization and no source/production changes implied by this document. **Not authorized in this R2.1 task.** Without an authorized run, do not produce L or infer it from S.
+- **T — Synthetic tests:** validate a proposed parser/transport/error classifier **only after implementation authorization**, not the real Rovo behavior. T is never proof that Rovo returned a particular field or applied a workspace filter.
+
+For every subclaim, record `evidence_id`, vendor/tool version or commit, immutable source locator/digest, acquisition method/time, observed vs inferred classification, reviewed schema/response envelope (redacted), independent reviewer, and any unresolved counterexample. No raw OAuth payload, personal ID, client secret or repository data belongs in this PR.
+
+| G1 item | Allowed evidence | Required validation | PASS condition | PENDING / BLOCKED condition |
+|---|---|---|---|---|
+| **G1-01 internal `executeRead` input schema (P-01)** | S exact versioned `listBitbucketRepositories` descriptor + documented `executeRead` family; H/L if S omits required properties | Derive exhaustive nested `arguments.inputs` keys, types, required/optional/defaults, `cloudId` behavior, workspace selector and stable operation identifier; independently compare sources | `CONTRACT_PASS` only if complete pinned descriptor and exact internal envelope, no unknown required field. `RUNTIME_PASS` only with H/L proving acceptance, if required by contract | S fragment, inferred field names, unresolved required params or version mismatch → **G1-01 BLOCKED** |
+| **G1-02 `CallToolResult` shape (P-02)** | S source/descriptor of actual result path **and** H/L sanitized success/error envelope when observable shape is runtime-dependent | Identify JSON-RPC `result` vs `error`, `content`/`structuredContent` variant, `isError`, text parsing boundaries and bounded decoding; map only proven form | Exact extraction algorithm derivable from pinned S; any runtime-dependent variant is confirmed by H/L with provenance | Generic MCP examples alone, inferred JSON array or absence of real variant evidence → **BLOCKED** |
+| **G1-03 `name` / `slug` normalization (P-02)** | Versioned S with field definitions **and** H/L redacted actual success shape, or exact versioned upstream serializer proof without execution (contract-only, runtime unproven) | Confirm paths, primitive types, nonempty requirements, UTF-8 ceilings, rejection of partial/missing/ambiguous elements; independent fixture/schema cross-check | Contract mapping is complete, fields exist and can be derived without guessing; empirical correctness marked RUNTIME_PASS only with H/L | Unclear field origins, conflated REST/Rovo shapes, synthetic-only output → **BLOCKED**, redesign external projection |
+| **G1-04 next-page and `truncated` (P-02)** | S official versioned pagination contract; H/L shape(s) for continuation and end-of-page when runtime-dependent | Validate true/false and over-25 signals, no client next URL, deterministic first-page limit, handling exactly25 without next, absent signal and unknown cursor formats | Exact and unambiguous completeness predicate documented; H/L needed to mark observed runtime behavior | Cannot distinguish no-more-page from unknown/missing signal, no evidence for next-state semantics → **BLOCKED**, never default false |
+| **G1-05 workspace scoping (P-01/P-06)** | S pinned implementation/API contract showing workspace applied server-side **plus** H/L separately authorized request/response or attested runtime trace where enforcement requires execution | Trace approved slug → exact upstream input → upstream server-side filtering, verify no all-workspace fetch followed by local post-filter, negative/mismatch handling | CONTRACT_PASS for verified binding; **RUNTIME_PASS requires H/L** demonstrating actual requested operation is bounded to that workspace | Metadata label only, post-filtered all-workspace result, silent workspace ignore, lacking runtime proof → **G1 BLOCKED / FIXED_WORKSPACE_NOT_PROVEN** |
+| **G1-06 permission denial (P-04)** | S pinned documented Rovo error variant plus H/L denial-shape evidence when response classification is runtime-dependent | Distinguish HTTP 401/403 vs HTTP 200 + validated JSON-RPC denied result; check exact machine-readable codes, never inspect raw error text heuristically | `-32052` may be enabled **only** with exact unambiguous confirmed error code/shape; otherwise classify generically | Missing exact evidence → **P-04 PENDING** and disable `-32052`, not a false PASS; G1 can proceed only if generic failure mapping is retained |
+| **G1-07 non-200 HTTP status taxonomy** | Existing Core source at immutable base + normative HTTP semantics (S); controlled T tests later; H/L only to prove specific Rovo status occurrence | Enumerate every status class and transport exception, precedence before parsing body, no upstream auth/header leak, sanitize output | **DESIGN_CONTRACT_PASS** when full mapping below is fixed; tests required at G5; source-specific Rovo occurrence never inferred from S | Any unclassified status or body-parsing fallback → **BLOCKED**; live behavior remains NOT_RUNTIME_PROVEN |
+
+**Aggregate G1 rule:** `G1 PASS` requires all mandatory interface/data/workspace contract elements above, verified G1-05 **runtime** scoping evidence (not mere metadata), a complete pinned response-normalization and completeness predicate, and independent contract review. `G1-06` may remain PENDING **only if** its specialized `-32052` classification stays disabled with generic fail-closed behavior. `G1-07` can be DESIGN_CONTRACT_PASS while G5 runtime-free transport tests remain unrun; this is not a claim of actual Rovo status occurrence. If existing H cannot prove a necessary behavior, G1 stays **PENDING/BLOCKED** until a *new separately authorized* L acquisition or a revised design. **No probe, discovery, token inspection, Bitbucket enumeration or OAuth operation is authorized now.**
+
+**Exhaustive HTTP precedence for the virtual path:**
+
+| Actual HTTP/transport outcome | External classification | Validation rule |
+|---|---|---|
+| **200** | Continue to body validation only | Only 200 may produce success; even HTTP 200 with JSON-RPC `error` or `isError` fails |
+| **401, 403** | `502 / -32051 Bitbucket upstream authorization failed` | Do not parse/forward body, cannot infer exact workspace ACL, ignore WWW-Authenticate |
+| **408, 429** | `502 / -32053 Bitbucket upstream unavailable` | Treat transient status as unavailable; **no automatic retry**, do not follow Retry-After |
+| **300–399** | `502 / -32053 Bitbucket upstream unavailable` | Redirects rejected, no Location follow/reflect |
+| **500–599** | `502 / -32053 Bitbucket upstream unavailable` | Generic 5xx; no raw server error |
+| **Other 400–499** (including 400,404,405,409,422) | `502 / -32055 Bitbucket operation failed` | Classified generic upstream refusal, no body parsing or speculation |
+| **Other 200–299** (including 201,202,204,206) | `502 / -32054 Bitbucket upstream response rejected` | Strict 200-only protocol; 204/no body/206/partial not success |
+| **100–199 or out-of-range status** (if represented) | `502 / -32054 Bitbucket upstream response rejected` | Unexpected status fail closed; not silently normalized |
+| **Network error, VPC exception, timeout/abort, no Response object** | `502 / -32053 Bitbucket upstream unavailable` | Catch and sanitize; no public fallback |
+| **HTTP 200 with invalid/mismatched JSON-RPC ID, schema, missing page state or excessive size** | `502 / -32054 Bitbucket upstream response rejected` | Mandatory ordered schema/byte validation |
+| **HTTP 200 with valid known Rovo permission denial** | `403 / -32052 Bitbucket workspace access denied` **only if P-04 closed** | Otherwise use `502 / -32055 Bitbucket operation failed`; never reinterpret HTTP 403 body |
+| **HTTP 200 with other recognized/unknown JSON-RPC error** | `502 / -32055 Bitbucket operation failed` | Generic fixed error; no upstream details |
+
+The `4.5` error codes/messages remain authoritative; this table supplies **complete HTTP status mapping** and rejects any ambiguous pass-through. A status outside these cases is a contract violation, not an invitation to guess. Error classification takes place before any attempt to normalize repository data.
+
 ## 5. Pending decisions, falsification conditions and hard stop
 
 | Pending | Gate | What must be established | Hard failure / required response |
 |---|---|---|---|
 | **P-01** | **G1** | Exact `listBitbucketRepositories` descriptor/version, `executeRead.arguments.inputs` keys/types, required workspace key, `cloudId` semantics and accepted defaults | If exact keys cannot be proven, **no G4**. Do not invent names, make generic executeRead callable or substitute direct REST |
 | **P-02** | **G1** | Actual `CallToolResult` JSON shape, precise data extractor, `name`/`slug` mapping, next-page signal, reliable completeness and error variants | If safe extraction or truthfully calculated `truncated` is impossible, revise R2 projection and obtain independent review; **no G4** |
-| **P-03** | **G2** | Exactly one approved workspace slug and evidence of organization linkage; acceptance of first-page max25 behavior | No approval means virtual tool remains unavailable; never assume `diamondhead` |
+| **P-03** | **G2** | Exactly one approved workspace slug, immutable Git commit-pinned Owner decision evidence + SHA-256, organization linkage, and acceptance of first-page max25 behavior; source literal and required runtime `BITBUCKET_WORKSPACE_SLUG` must be independently cross-checked | Missing/mismatched slug/ref/hash/env, revoked approval or syntax violation → virtual tool disabled; no fallback, never assume `diamondhead` |
 | **P-04** | **G1** | Exact Rovo permission-denial error structure (to distinguish -32052 from generic failures) | Until proven, publish only the generic sanitized failure; do not claim ACL classification |
 | **P-05** | **G3** | Bridge OAuth principal's effective Rovo Bitbucket read permission without extracting or modifying credentials | Missing read grant/denial means no auth expansion and no runtime authorization |
-| **P-06** | **G1/G2** | Portal accepts zero-argument external contract; precise metadata, tool-list pagination and workspace binding cannot be bypassed | If Portal adds required metadata or Rovo ignores workspace filters, return to design review, not silent relaxation |
+| **P-06** | **G1/G2** | Portal accepts zero-argument external contract; precise metadata, tool-list pagination and workspace binding cannot be bypassed; distinguish schema-only from authorized runtime workspace scoping evidence | If Portal needs additional input or Rovo ignores workspace filters, return to design review, not silent relaxation; metadata-only ⇒ runtime NOT_PROVEN |
 
 **Counterexamples with mandatory outcomes:**
 1. If the upstream operation cannot be **reliably restricted to the approved workspace**, the fixed-workspace invariant is **NOT_MET**. Neither returned-data filtering after an all-workspace fetch nor a best-effort query string is a sufficient replacement; block implementation.
@@ -259,8 +331,8 @@ Approval phases are **independent**; evidence or authorization in one phase cann
 | Phase | Gate | State now | Required outcome |
 |---|---|---|---|
 | **Baseline** | G0 | **PASS** | Merged master baseline and three CI jobs verified |
-| **Contract capture** | G1 | **PENDING** | Capture schema-only, redacted, versioned operation/result/error evidence (read-only metadata inspection separately authorized); no live Bitbucket list invocation |
-| **Owner workspace decision** | G2 | **PENDING** | Approve exact fixed workspace, org linkage and one-page behavior |
+| **Contract and runtime evidence** | G1 | **PENDING / NOT_RUNTIME_PROVEN** | Apply `4.6` G1-01–07 evidence matrix. Static descriptor establishes advertised contracts only; workspace isolation and actual result behavior require pre-existing approved H or a future separately authorized L. No such new invocation authorized here. |
+| **Owner workspace decision** | G2 | **PENDING** | Approve exact fixed slug and immutable decision ref/hash, org linkage and one-page behavior. Verify separately pinned Worker literal and runtime env equality before any future deployment. |
 | **Effective permission evidence** | G3 | **PENDING** | Sanitary read-permission classification for the actual Bridge principal; no secret/token exposure or new OAuth grant |
 | **Design review and approval** | D-GATE | **PENDING** | Reviewer confirms R2 coherence and Pending Decisions are hard stops; Owner decides design adoption |
 | **PR #3 Ready/merge (DESIGN ONLY)** | D-MERGE | **PENDING** | D-GATE passed, exact document-only diff, Owner explicitly authorizes Ready and merge. May merge with G1–G3 still pending **only if** implementation stays blocked and no unknown upstream contract is misrepresented as fixed |
@@ -276,6 +348,10 @@ Approval phases are **independent**; evidence or authorization in one phase cann
 ## 7. Test policy and non-functional requirements for the *future* implementation
 
 **Offline contract tests, later implementation PR only:**
+- Approved Worker literal vs required `BITBUCKET_WORKSPACE_SLUG`: missing, empty, casing, whitespace, Unicode, invalid syntax, swapped decision ref/hash, different slug, revoked/changed decision, flag `on` or non-VPC mode → virtual tool never advertised or dispatched, metadata tools preserved, direct virtual call `503/-32050` with zero upstream calls; independently assert fixed code ref and decision evidence match under G2.
+- G1-01–07 evidence fixtures: accept only version-pinned exact schema; reject forged/partial nested inputs, fabricated result variants, ambiguous `name`/`slug`, unknown cursor/`truncated`, cross-workspace data, misleading permission errors. Mocked tests show only implementation behavior, **not** live Rovo evidence.
+- Non-200 classification table `4.6`: 1xx, 200, 201/202/204/206, 3xx, 400/401/403/404/408/409/422/429/other4xx, 500/503/other5xx, invalid status, network exception, timeout and HTTP200 JSON-RPC errors all checked without forwarding upstream data.
+
 - `tools/list` valid first page yields metadata tools plus exactly one virtual tool; cursor page adds zero virtual entries; invalid upstream format, SSE, oversized list, collision or duplicate fail closed. Cross-page filtering never leaks generic read/write tools.
 - Valid explicit empty args → one upstream internal `executeRead` with literal `listBitbucketRepositories` and **only** schema-pinned workspace-scoped `inputs`; strict response ID equality; exactly one synthesized `CallToolResult`.
 - Missing/extra/array/null arguments, caller-controlled workspace, cloudId, operation/input/URL/cursor, malformed JSON-RPC, batch/notification and unrelated names → fixed denial and **zero upstream calls**.
@@ -292,12 +368,14 @@ Approval phases are **independent**; evidence or authorization in one phase cann
 
 | Finding | R2 revision | Status |
 |---|---|---|
-| **R1-FND-001 (Major/High)** | Single `createMcpRelay` optional virtual-tool slot; Core/Worker responsibilities and auth-first, filter-then-synthesize, internal fixed-VPC dispatch spelled out. No generic executeRead exposure. | **RESOLVED_IN_DESIGN_R2**; implementation untested |
-| **R1-FND-002 (Major/High)** | Explicit zero-args input schema, external output, JSON-RPC/internal operation shape, upstream parsing and size/order limits, pagination/truncation, sanitized error table; actual Rovo-specific fields frozen only after G1. | **RESOLVED_IN_DESIGN_R2_WITH_PENDING_G1_CONTRACT**; no fabricated source fields |
-| **R1-FND-003 (Minor/High)** | D-GATE/D-MERGE separated from G1–G3, I-AUTH, I-REVIEW, DEP-AUTH, R-ACCEPT and implementation merge. | **RESOLVED_IN_DESIGN_R2**; decisions unapproved |
+| **R1-FND-001 (Major/High)** | Retains one `createMcpRelay` slot; R2.1 adds literal Owner-approved slug/decision ref/hash in Worker source, required independent `BITBUCKET_WORKSPACE_SLUG` runtime binding, Core strict validation at tools/list/call and reapproval on change. | **RESOLVED_IN_DESIGN_R2_1**; workspace actual approval G2 PENDING |
+| **R1-FND-002 (Major/High)** | Keeps R2 contract and limits; adds G1-01–07 evidence source/method/PASS/BLOCKED matrix, static-vs-runtime proof separation and exhaustive non-200 HTTP mapping. | **RESOLVED_IN_DESIGN_R2_1_WITH_PENDING_G1_EVIDENCE**; real schema/data/workspace behavior NOT_PROVEN |
+| **R1-FND-003 (Minor/High)** | D-GATE/D-MERGE separation from implementation and deployment remains unchanged. | **RESOLVED_IN_DESIGN_R2 (MAINTAINED)**; decisions unapproved |
 
-**Diff summary (R1 → R2):** fixed the previously optional architecture choice; introduced one narrow Core extension type and exact dispatch boundaries; selected external schema and bounded normalized output; specified internal RPC construction, ID check, fail-closed validation order, byte/time/page limits and error taxonomy; enumerated source-dependent Pending Decisions and falsification gates; split design approval/merge from later implementation/deployment/runtime acceptance. No change to production or existing two published tools.
+**R2.1 limited diff (R2 → R2.1):** specified immutable Owner workspace decision ref/hash + Worker literal, required runtime env binding, Core equality/syntax checks and reapproval on changes; added G1-01–07 structured proof acquisition/decision matrix with strict runtime-vs-static separation and complete HTTP 1xx–5xx/transport exception mapping; expanded future test obligations; R1-FND-003 governance distinction unchanged. **No new Rovo field asserted, no source/test/config change.**
 
-## 9. R2 conclusion
+**Historical diff summary (R1 → R2):** fixed the previously optional architecture choice; introduced one narrow Core extension type and exact dispatch boundaries; selected external schema and bounded normalized output; specified internal RPC construction, ID check, fail-closed validation order, byte/time/page limits and error taxonomy; enumerated source-dependent Pending Decisions and falsification gates; split design approval/merge from later implementation/deployment/runtime acceptance. No change to production or existing two published tools.
 
-**Design R2 = READY_FOR_INDEPENDENT_DESIGN_REVIEW, NOT IMPLEMENTATION_READY.** G0 remains PASS. **G1, G2, G3, D-GATE and D-MERGE are PENDING; G4 onward, I-AUTH, DEP-AUTH and R-ACCEPT are NOT_STARTED.** This document does not itself establish source proof for the actual Rovo operation schema, authorize OAuth/Cloudflare changes, approve an Owner decision, permit live Bitbucket access, or authorize any source modification, deployment or PR merge.
+## 9. R2.1 conclusion
+
+**Design R2.1 = READY_FOR_INDEPENDENT_DESIGN_REVIEW, NOT IMPLEMENTATION_READY.** G0 remains PASS. **G1, G2, G3, D-GATE and D-MERGE are PENDING; G4 onward, I-AUTH, DEP-AUTH and R-ACCEPT are NOT_STARTED.** This document does not itself establish source proof for the actual Rovo operation schema, authorize OAuth/Cloudflare changes, approve an Owner decision, permit live Bitbucket access, or authorize any source modification, deployment or PR merge.
