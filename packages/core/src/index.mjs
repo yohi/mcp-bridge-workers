@@ -44,18 +44,26 @@ function rpcError(payload, message) {
     error: {code: -32001, message}}, 403);
 }
 
-// A local relay is reached through an Access-protected Cloudflare Tunnel.
-// Secrets and destination come only from Worker bindings, never caller inputs.
+// Legacy HTTP relay uses Access-protected public Tunnel; VPC relay uses
+// the fixed private Service Binding. Selection comes only from Worker vars.
+// A failed VPC request MUST NOT silently fall back to the public hostname.
 function getRoute(env,fixedUpstream) {
   const mode=env.ATLASSIAN_UPSTREAM_MODE ?? 'direct';
   if(mode==='direct') {
     if(!upstreamCredentialValid(env.UPSTREAM_AUTHORIZATION)) return null;
     return {url:fixedUpstream,authorization:env.UPSTREAM_AUTHORIZATION,access:null};
   }
-  if(mode!=='local_relay')return null;
+  if(mode!=='local_relay' && mode!=='local_relay_vpc')return null;
   if(typeof env.LOCAL_RELAY_BEARER_TOKEN!=='string' ||
-     env.LOCAL_RELAY_BEARER_TOKEN.length<32 ||
-     typeof env.CF_ACCESS_CLIENT_ID!=='string' ||
+     env.LOCAL_RELAY_BEARER_TOKEN.length<32) return null;
+  if(mode==='local_relay_vpc') {
+    if(!env.ATLASSIAN_RELAY_VPC ||
+        typeof env.ATLASSIAN_RELAY_VPC.fetch!=='function') return null;
+    return {url:new URL('http://127.0.0.1/mcp'),
+      authorization:'Bearer '+env.LOCAL_RELAY_BEARER_TOKEN,
+      access:null, transport:'vpc'};
+  }
+  if(typeof env.CF_ACCESS_CLIENT_ID!=='string' ||
      !env.CF_ACCESS_CLIENT_ID ||
      typeof env.CF_ACCESS_CLIENT_SECRET!=='string' ||
      env.CF_ACCESS_CLIENT_SECRET.length<32) return null;
@@ -374,7 +382,7 @@ export function createMcpRelay(config) {
           ...(request.method === 'POST' ? {body: requestBody} : {}),
           redirect:'manual',
         };
-        const response = isVpcMcpProbe
+        const response = isVpcMcpProbe || route.transport === 'vpc'
           ? await env.ATLASSIAN_RELAY_VPC.fetch(route.url.toString(),fetchOptions)
           : await fetch(route.url.toString(),fetchOptions);
         if (response.status === 401 || response.status === 403) {
