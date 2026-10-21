@@ -13,7 +13,7 @@ test('mcp-remote negotiates OAuth scopes as successful tunnel, without a forced 
   assert.doesNotMatch(compose,/--authorize-param|prompt=consent|--skip-resource/);
 });
 test('isolated local OAuth uses published pinned version with non-root runtime',()=>{
-  assert.match(image,/npm install --global --omit=dev mcp-remote@0\.14\.3/);
+  assert.match(image,/npm install --global --omit=dev --ignore-scripts mcp-remote@0\.14\.3/);
   assert.match(image,/^USER node$/m);
   assert.match(compose,/image: mcp-bridge-atlassian-auth:0\.14\.3/);
   assert.match(compose,/profiles: \[auth\]/);

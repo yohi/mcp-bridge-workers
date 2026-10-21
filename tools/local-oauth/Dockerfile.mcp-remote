@@ -5,7 +5,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install --global --omit=dev mcp-remote@0.14.3 \
+RUN npm install --global --omit=dev --ignore-scripts mcp-remote@0.14.3 \
     && npm cache clean --force
 RUN install -d -m 0700 -o node -g node /home/node/.mcp-auth \
     && install -d -m 0755 /etc/mcp-bridge \

@@ -133,7 +133,9 @@ async function main(){
   if(secret.length<32)throw Error('secret_too_short');
   const args=['https://mcp.atlassian.com/v2/mcp','38678','--transport',
     'http-only','--host','localhost','--auth-timeout','180'];
-  const child=spawn('mcp-remote',args,{stdio:['pipe','pipe','ignore'],env:process.env});
+  const child=spawn('mcp-remote',args,{stdio:['pipe','pipe','ignore'],env:{
+    ...process.env,PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  }});
   const rpc=new StdioRpc(child);
   const server=http.createServer(makeHandler({rpc,secret}));
   server.listen(18787,'127.0.0.1');

@@ -57,7 +57,8 @@ try {
   });
   const port=server.address().port;
   expectedHost = '127.0.0.1:' + port;
-  const redirectUri='http://' + expectedHost + '/callback';
+  // OAuth native-app loopback redirects use HTTP only on the local interface.
+  const redirectUri='http://' + expectedHost + '/callback'; // NOSONAR: RFC 8252 permits HTTP only for loopback redirect URIs.
   const response=await fetch(metadata.registration_endpoint,{
     method:'POST',redirect:'error',
     headers:{'content-type':'application/json','accept':'application/json'},
