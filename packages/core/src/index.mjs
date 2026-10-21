@@ -223,12 +223,40 @@ export function createMcpRelay(config) {
         return json({service: serviceName, phase: 'transport-only', status: 'alive',
           upstreamConnection: 'not_verified'});
       }
-      if (url.pathname !== '/mcp') return json({error:'not_found'}, 404);
-      if (!['GET','POST','DELETE'].includes(request.method)) return json({error:'method_not_allowed'},405);
-
+      // Independent private-route liveness probe. It never switches /mcp,
+      // forwards credentials, or exposes the relay's response body.
+      if (url.pathname !== '/mcp' && url.pathname !== '/health/vpc') {
+        return json({error:'not_found'},404);
+      }
+      if (!['GET','POST','DELETE'].includes(request.method)) {
+        return json({error:'method_not_allowed'},405);
+      }
       const supplied = request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1];
       if (!(await equalSecret(supplied, env.PORTAL_BEARER_TOKEN))) {
-        return json({error:'unauthorized'}, 401);
+        return json({error:'unauthorized'},401);
+      }
+      if (url.pathname === '/health/vpc') {
+        if (request.method !== 'GET') return json({error:'method_not_allowed'},405);
+        if (!env.ATLASSIAN_RELAY_VPC ||
+            typeof env.ATLASSIAN_RELAY_VPC.fetch !== 'function') {
+          return json({error:'vpc_binding_not_configured'},503);
+        }
+        try {
+          // VPC Service fixes the destination to 127.0.0.1:18787; the URL
+          // supplies the scheme, Host header, and /health path only.
+          const response = await env.ATLASSIAN_RELAY_VPC.fetch(
+            'http://127.0.0.1/health', {
+              method:'GET',redirect:'manual',
+              headers:{accept:'application/json'},
+              signal:AbortSignal.timeout(8000),
+            });
+          try {await response.body?.cancel();} catch { /* no body forwarded */ }
+          if (response.status !== 200) return json({error:'vpc_health_unavailable'},502);
+          return json({service:serviceName,phase:'vpc-transport-only',
+            status:'reachable',upstreamConnection:'not_verified'});
+        } catch {
+          return json({error:'vpc_health_unavailable'},502);
+        }
       }
       const route=getRoute(env,upstream);
       if (!route) return json({error:'upstream_not_configured'},503);
