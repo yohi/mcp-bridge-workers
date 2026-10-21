@@ -72,6 +72,67 @@ function getRoute(env,fixedUpstream) {
 }
 
 
+const MAX_DENIAL_INSPECTION_BYTES = 65_536;
+
+/**
+ * TEMPORARY, opt-in 401/403 classification for an Access-protected upstream.
+ * The body is inspected in memory up to a fixed limit, never logged, returned,
+ * or persisted. No credential, hostname, incoming JSON-RPC value or arbitrary
+ * response header value is included in the diagnostic event.
+ */
+async function diagnoseUpstreamDenial(response) {
+  const type = response.headers.get('content-type') ?? '';
+  const diagnostic = {
+    event:'upstream_authorization_denied',
+    status:response.status,
+    media_type:/^text\/html(?:\s*;|$)/i.test(type) ? 'html' :
+      /^(application\/json|[^;]+\+json)(?:\s*;|$)/i.test(type) ? 'json' : 'other',
+    cf_mitigated_challenge:response.headers.get('cf-mitigated') === 'challenge',
+    cf_ray_present:response.headers.has('cf-ray'),
+    access_marker:false,
+    challenge_marker:false,
+    error_1020:false,
+    error_1042:false,
+    inspected_bytes:0,
+    inspection_limit_reached:false,
+    read_failed:false,
+  };
+  const reader = response.body?.getReader();
+  if (reader) {
+    const chunks = [];
+    let length = 0;
+    try {
+      while (length < MAX_DENIAL_INSPECTION_BYTES) {
+        const {done,value} = await reader.read();
+        if (done) break;
+        const take = Math.min(value.byteLength,MAX_DENIAL_INSPECTION_BYTES-length);
+        if (take) chunks.push(value.slice(0,take));
+        length += take;
+        if (take < value.byteLength || length === MAX_DENIAL_INSPECTION_BYTES) {
+          diagnostic.inspection_limit_reached = true;
+          break;
+        }
+      }
+      const bytes = new Uint8Array(length);
+      let pos = 0;
+      for (const chunk of chunks) {bytes.set(chunk,pos);pos += chunk.length;}
+      const text = new TextDecoder().decode(bytes).toLowerCase();
+      diagnostic.inspected_bytes = length;
+      diagnostic.access_marker = text.includes('cloudflare access') ||
+        text.includes('/cdn-cgi/access/') || text.includes('cloudflareaccess.com');
+      diagnostic.challenge_marker = text.includes('challenge-platform') ||
+        text.includes('attention required') || text.includes('just a moment');
+      diagnostic.error_1020 = /\berror\s*(?:code\s*:)?\s*1020\b/.test(text);
+      diagnostic.error_1042 = /\berror\s*(?:code\s*:)?\s*1042\b/.test(text);
+    } catch {
+      diagnostic.read_failed = true;
+    } finally {
+      try {await reader.cancel();} catch { /* best effort only */ }
+    }
+  }
+  console.warn('MCP_UPSTREAM_DENIAL ' + JSON.stringify(diagnostic));
+}
+
 const MAX_TOOL_LIST_RESPONSE_BYTES = 2_097_152;
 
 /**
@@ -249,7 +310,12 @@ export function createMcpRelay(config) {
           redirect:'manual',
         });
         if (response.status === 401 || response.status === 403) {
-          await response.body?.cancel();
+          if (env.UPSTREAM_DENIAL_DIAGNOSTICS === 'on') {
+            try {await diagnoseUpstreamDenial(response);}
+            catch {try {await response.body?.cancel();} catch { /* best effort */ }}
+          } else {
+            await response.body?.cancel();
+          }
           return json({error:'upstream_authorization_failed'},502);
         }
         if (response.status >= 300 && response.status < 400) {
