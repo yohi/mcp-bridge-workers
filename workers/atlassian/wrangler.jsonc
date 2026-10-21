@@ -16,6 +16,6 @@
   ],
   "vars": {
     "ATLASSIAN_UPSTREAM_MODE": "local_relay_vpc",
-    "UPSTREAM_DENIAL_DIAGNOSTICS": "off"
+    "ATLASSIAN_UNVERIFIED_READ_TOOLS": "off"
   }
 }
