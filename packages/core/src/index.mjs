@@ -319,7 +319,8 @@ export function createMcpRelay(config) {
         // Never forward the probe to the OAuth-backed stdio relay, and never
         // treat it as permission to invoke any additional MCP methods.
         if (payload && typeof payload === 'object' && !Array.isArray(payload) &&
-            payload.jsonrpc === '2.0' && payload.method === 'server/discover' &&
+            payload.jsonrpc === '2.0' && !isVpcMcpProbe &&
+            payload.method === 'server/discover' &&
             (typeof payload.id === 'string' || typeof payload.id === 'number')) {
           return json({jsonrpc:'2.0', id:payload.id,
             error:{code:-32601, message:'Method not found'}});
