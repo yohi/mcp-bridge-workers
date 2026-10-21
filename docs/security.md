@@ -31,7 +31,7 @@ These facts **do not** prove the bridge is generally read-only. Do not present i
 
 - [x] Architecture and runtime evidence recorded (limited operation, actual Portal path).
 - [x] Cleanup committed with default-deny nested tool gate and restricted health endpoint.
-- [ ] Latest cleanup commit passes Node 20, Node 22 and Docker CI.
+- [x] Cleanup implementation passed Node 20, Node 22 and Docker CI ([run 39551071240](https://github.com/yohi/mcp-bridge-workers/actions/runs/39551071240)); recheck after any follow-up change.
 - [ ] Operator deploys latest cleanup commit (the proven runtime predates this cleanup).
 - [ ] Operator verifies actual Portal `getAccessibleAtlassianResources` succeeds and `tools/list` exposes exactly two default-allowed tools. No raw Atlassian payload or tokens shared.
 - [ ] Owner reviews policy trade-off: intentional disabling of `discover` / `executeRead` means detailed Jira, Confluence and Bitbucket reads are unavailable until a separately reviewed opt-in.
