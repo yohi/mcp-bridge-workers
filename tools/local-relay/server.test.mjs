@@ -21,10 +21,11 @@ const post=(url,body,token=secret,extras={})=>fetch(url+'/mcp',{
  body:JSON.stringify(body)
 });
 const req=(method,id=1,params)=>({jsonrpc:'2.0',method,id,params});
-test('child process receives only allowlisted environment and a fixed PATH',()=>{
+test('child process uses the fixed Node entrypoint and allowlisted environment',()=>{
  const source=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
- assert.match(source,/env:\{\s*HOME:process\.env\.HOME,\s*MCP_REMOTE_CONFIG_DIR:process\.env\.MCP_REMOTE_CONFIG_DIR,\s*PATH:'\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin'/);
- assert.doesNotMatch(source,/env:\{\.\.\.process\.env/);
+ assert.match(source,/spawn\(process\.execPath,\[\s*'\/usr\/local\/lib\/node_modules\/mcp-remote\/dist\/proxy\.js',\.\.\.args/);
+ assert.match(source,/env:\{\s*HOME:process\.env\.HOME,\s*MCP_REMOTE_CONFIG_DIR:process\.env\.MCP_REMOTE_CONFIG_DIR,?\s*\}\}/);
+ assert.doesNotMatch(source,/PATH:|\.\.\.process\.env/);
 });
 test('unauthorized HTTP denied before any RPC invocation',()=>serve(async({rpc,url})=>{
  const r=await post(url,req('tools/list'),null);assert.equal(r.status,401);
