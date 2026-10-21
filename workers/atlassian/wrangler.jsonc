@@ -8,6 +8,7 @@
     "enabled": false
   },
   "vars": {
-    "ATLASSIAN_UPSTREAM_MODE": "local_relay"
+    "ATLASSIAN_UPSTREAM_MODE": "local_relay",
+    "UPSTREAM_DENIAL_DIAGNOSTICS": "on"
   }
 }
