@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {makeHandler,StdioRpc} from './server.mjs';
@@ -20,6 +21,11 @@ const post=(url,body,token=secret,extras={})=>fetch(url+'/mcp',{
  body:JSON.stringify(body)
 });
 const req=(method,id=1,params)=>({jsonrpc:'2.0',method,id,params});
+test('child process receives only allowlisted environment and a fixed PATH',()=>{
+ const source=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
+ assert.match(source,/env:\{\s*HOME:process\.env\.HOME,\s*MCP_REMOTE_CONFIG_DIR:process\.env\.MCP_REMOTE_CONFIG_DIR,\s*PATH:'\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin'/);
+ assert.doesNotMatch(source,/env:\{\.\.\.process\.env/);
+});
 test('unauthorized HTTP denied before any RPC invocation',()=>serve(async({rpc,url})=>{
  const r=await post(url,req('tools/list'),null);assert.equal(r.status,401);
  assert.equal(rpc.calls.length,0);

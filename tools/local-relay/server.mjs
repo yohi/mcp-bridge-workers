@@ -134,7 +134,9 @@ async function main(){
   const args=['https://mcp.atlassian.com/v2/mcp','38678','--transport',
     'http-only','--host','localhost','--auth-timeout','180'];
   const child=spawn('mcp-remote',args,{stdio:['pipe','pipe','ignore'],env:{
-    ...process.env,PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    HOME:process.env.HOME,
+    MCP_REMOTE_CONFIG_DIR:process.env.MCP_REMOTE_CONFIG_DIR,
+    PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
   }});
   const rpc=new StdioRpc(child);
   const server=http.createServer(makeHandler({rpc,secret}));
