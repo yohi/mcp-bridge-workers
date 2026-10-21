@@ -547,3 +547,105 @@ test('vpc-health-probe binding cannot alter normal MCP upstream selection',async
   assert.equal(publicCalls,1);
   assert.equal(vpcCalls,0);
 });
+
+
+test('vpc-MCP-probe sends only ping to VPC and never to the public origin',async()=>{
+  let vpcCalls=0;
+  const diag={...env,ATLASSIAN_RELAY_VPC:{
+    async fetch(url,options) {
+      vpcCalls++;
+      assert.equal(url,'http://127.0.0.1/mcp');
+      assert.equal(options.method,'POST');
+      assert.equal(options.headers.get('authorization'),'Bearer '+'r'.repeat(48));
+      assert.equal(options.headers.get('cf-access-client-id'),null);
+      assert.equal(options.headers.get('cf-access-client-secret'),null);
+      assert.equal(options.headers.get('cookie'),null);
+      assert.equal(JSON.parse(new TextDecoder().decode(options.body)).method,'ping');
+      return Response.json({jsonrpc:'2.0',id:'diag-ping',result:{}});
+    }
+  },LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48)};
+  await withFetch(async()=>{throw Error('public origin should not be used');},async()=>{
+    const ok=await worker.fetch(new Request('https://bridge.example/mcp/vpc',{
+      method:'POST',headers:{...auth,'content-type':'application/json',cookie:'dont-forward'},
+      body:JSON.stringify(call('ping',{},'diag-ping'))
+    }),diag);
+    assert.equal(ok.status,200);
+    assert.equal((await ok.json()).result.constructor,Object);
+  });
+  assert.equal(vpcCalls,1);
+});
+
+test('vpc-MCP-probe only allows argument-free resource discovery and ping',async()=>{
+  let forwardCount=0;
+  const diag={...env,ATLASSIAN_RELAY_VPC:{async fetch(_url,opts){
+    forwardCount++;
+    const payload=JSON.parse(new TextDecoder().decode(opts.body));
+    assert.equal(payload.method,'tools/call');
+    assert.equal(payload.params.name,'getAccessibleAtlassianResources');
+    assert.deepEqual(payload.params.arguments,{});
+    return Response.json({jsonrpc:'2.0',id:payload.id,result:{resources:[]}});
+  }},LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48)};
+  const req=(payload,method='POST')=>new Request('https://bridge.example/mcp/vpc',{
+    method,headers:{...auth,'content-type':'application/json'},
+    ...(method==='POST'?{body:JSON.stringify(payload)}:{})
+  });
+  const denied=[
+    call('tools/list',{},7),
+    call('initialize',{},8),
+    call('notifications/initialized',{},9),
+    call('tools/call',{name:'executeRead',arguments:{}},10),
+    call('tools/call',{name:'executeWrite',arguments:{}},11),
+    call('tools/call',{name:'getAccessibleAtlassianResources',arguments:{unexpected:'x'}},12),
+    call('tools/call',{name:'getAccessibleAtlassianResources',arguments:{},extra:'x'},13),
+    call('tools/call',{name:'getAccessibleAtlassianResources'},14),
+    call('server/discover',{},15),
+  ];
+  await withFetch(async()=>{throw Error('public fetch must not be called');},async()=>{
+    for(const payload of denied){
+      const res=await worker.fetch(req(payload),diag);
+      assert.equal(res.status,403,payload.method);
+    }
+    for(const method of ['GET','DELETE']){
+      const res=await worker.fetch(req(null,method),diag);
+      assert.equal(res.status,405);
+    }
+    const good=await worker.fetch(req(call('tools/call',{
+      name:'getAccessibleAtlassianResources',arguments:{}},16)),diag);
+    assert.equal(good.status,200);
+    assert.deepEqual((await good.json()).result,{resources:[]});
+  });
+  assert.equal(forwardCount,1);
+});
+
+test('vpc-MCP-probe requires bearer, VPC service and relay credential; fails closed',async()=>{
+  let vpcCalls=0;
+  const bound={...env,LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    ATLASSIAN_RELAY_VPC:{async fetch(){vpcCalls++;return Response.json({})}}};
+  const req=headers=>new Request('https://bridge.example/mcp/vpc',{
+    method:'POST',headers:{'content-type':'application/json',...headers},
+    body:JSON.stringify(call('ping',{},1))
+  });
+  assert.equal((await worker.fetch(req(),bound)).status,401);
+  assert.equal((await worker.fetch(req(auth),env)).status,503);
+  assert.equal((await worker.fetch(req(auth),{...bound,LOCAL_RELAY_BEARER_TOKEN:''})).status,503);
+  assert.equal((await worker.fetch(req(auth),{...bound,ATLASSIAN_RELAY_VPC:null})).status,503);
+  assert.equal(vpcCalls,0);
+  const fault=await worker.fetch(req(auth),{...bound,
+    ATLASSIAN_RELAY_VPC:{fetch:async()=>{throw Error('PRIVATE_EXCEPTION')}}});
+  assert.equal(fault.status,502);
+  assert.deepEqual(await fault.json(),{error:'upstream_unavailable'});
+});
+
+test('vpc-MCP-probe never passes upstream challenge or relay bearer to client',async()=>{
+  const diag={...env,LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    ATLASSIAN_RELAY_VPC:{fetch:async()=>new Response('SECRET_BODY',{
+      status:403,headers:{'cf-mitigated':'challenge','set-cookie':'SECRET_COOKIE'}
+    })}};
+  const res=await worker.fetch(new Request('https://bridge.example/mcp/vpc',{
+    method:'POST',headers:{...auth,'content-type':'application/json'},
+    body:JSON.stringify(call('ping',{},1))}),diag);
+  assert.equal(res.status,502);
+  assert.deepEqual(await res.json(),{error:'upstream_authorization_failed'});
+  assert.equal(res.headers.get('cf-mitigated'),null);
+  assert.equal(res.headers.get('set-cookie'),null);
+});
