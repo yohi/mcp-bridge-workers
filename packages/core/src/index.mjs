@@ -80,67 +80,6 @@ function getRoute(env,fixedUpstream) {
 }
 
 
-const MAX_DENIAL_INSPECTION_BYTES = 65_536;
-
-/**
- * TEMPORARY, opt-in 401/403 classification for an Access-protected upstream.
- * The body is inspected in memory up to a fixed limit, never logged, returned,
- * or persisted. No credential, hostname, incoming JSON-RPC value or arbitrary
- * response header value is included in the diagnostic event.
- */
-async function diagnoseUpstreamDenial(response) {
-  const type = response.headers.get('content-type') ?? '';
-  const diagnostic = {
-    event:'upstream_authorization_denied',
-    status:response.status,
-    media_type:/^text\/html(?:\s*;|$)/i.test(type) ? 'html' :
-      /^(application\/json|[^;]+\+json)(?:\s*;|$)/i.test(type) ? 'json' : 'other',
-    cf_mitigated_challenge:response.headers.get('cf-mitigated') === 'challenge',
-    cf_ray_present:response.headers.has('cf-ray'),
-    access_marker:false,
-    challenge_marker:false,
-    error_1020:false,
-    error_1042:false,
-    inspected_bytes:0,
-    inspection_limit_reached:false,
-    read_failed:false,
-  };
-  const reader = response.body?.getReader();
-  if (reader) {
-    const chunks = [];
-    let length = 0;
-    try {
-      while (length < MAX_DENIAL_INSPECTION_BYTES) {
-        const {done,value} = await reader.read();
-        if (done) break;
-        const take = Math.min(value.byteLength,MAX_DENIAL_INSPECTION_BYTES-length);
-        if (take) chunks.push(value.slice(0,take));
-        length += take;
-        if (take < value.byteLength || length === MAX_DENIAL_INSPECTION_BYTES) {
-          diagnostic.inspection_limit_reached = true;
-          break;
-        }
-      }
-      const bytes = new Uint8Array(length);
-      let pos = 0;
-      for (const chunk of chunks) {bytes.set(chunk,pos);pos += chunk.length;}
-      const text = new TextDecoder().decode(bytes).toLowerCase();
-      diagnostic.inspected_bytes = length;
-      diagnostic.access_marker = text.includes('cloudflare access') ||
-        text.includes('/cdn-cgi/access/') || text.includes('cloudflareaccess.com');
-      diagnostic.challenge_marker = text.includes('challenge-platform') ||
-        text.includes('attention required') || text.includes('just a moment');
-      diagnostic.error_1020 = /\berror\s*(?:code\s*:)?\s*1020\b/.test(text);
-      diagnostic.error_1042 = /\berror\s*(?:code\s*:)?\s*1042\b/.test(text);
-    } catch {
-      diagnostic.read_failed = true;
-    } finally {
-      try {await reader.cancel();} catch { /* best effort only */ }
-    }
-  }
-  console.warn('MCP_UPSTREAM_DENIAL ' + JSON.stringify(diagnostic));
-}
-
 const MAX_TOOL_LIST_RESPONSE_BYTES = 2_097_152;
 
 /**
@@ -222,6 +161,9 @@ export function createMcpRelay(config) {
     throw new Error('upstreamUrl must be a fixed HTTPS URL');
   }
   const tools = new Set(config.allowedTools);
+  // Unverified nested executeRead semantics must never be assumed safe.
+  // Both tools stay unavailable unless an explicit, reviewed opt-in is set.
+  const unverifiedTools = new Set(['discover','executeRead']);
   const serviceName = config.name;
 
   return {
@@ -231,10 +173,9 @@ export function createMcpRelay(config) {
         return json({service: serviceName, phase: 'transport-only', status: 'alive',
           upstreamConnection: 'not_verified'});
       }
-      // Independent private-route liveness probe. It never switches /mcp,
-      // forwards credentials, or exposes the relay's response body.
-      if (url.pathname !== '/mcp' && url.pathname !== '/health/vpc' &&
-          url.pathname !== '/mcp/vpc') {
+      // Authenticated operator health probe and the normal MCP route only.
+      // /health/vpc cannot invoke any MCP method or forward caller secrets.
+      if (url.pathname !== '/mcp' && url.pathname !== '/health/vpc') {
         return json({error:'not_found'},404);
       }
       if (!['GET','POST','DELETE'].includes(request.method)) {
@@ -267,23 +208,11 @@ export function createMcpRelay(config) {
           return json({error:'vpc_health_unavailable'},502);
         }
       }
-      const isVpcMcpProbe = url.pathname === '/mcp/vpc';
-      if (isVpcMcpProbe && request.method !== 'POST') {
-        return json({error:'method_not_allowed'},405);
-      }
-      // The probe is deliberately restricted to two side-effect-free MCP
-      // operations. /mcp continues to use the legacy public Access route.
-      const route = isVpcMcpProbe
-        ? (env.ATLASSIAN_RELAY_VPC &&
-           typeof env.ATLASSIAN_RELAY_VPC.fetch === 'function' &&
-           typeof env.LOCAL_RELAY_BEARER_TOKEN === 'string' &&
-           env.LOCAL_RELAY_BEARER_TOKEN.length >= 32
-          ? {url:new URL('http://127.0.0.1/mcp'),
-             authorization:'Bearer '+env.LOCAL_RELAY_BEARER_TOKEN,
-             access:null}
-          : null)
-        : getRoute(env,upstream);
+      const route = getRoute(env,upstream);
       if (!route) return json({error:'upstream_not_configured'},503);
+      const permittedTools = env.ATLASSIAN_UNVERIFIED_READ_TOOLS === 'on'
+        ? tools
+        : new Set([...tools].filter(name => !unverifiedTools.has(name)));
 
       let requestBody;
       let isToolList = false;
@@ -327,7 +256,7 @@ export function createMcpRelay(config) {
         // Never forward the probe to the OAuth-backed stdio relay, and never
         // treat it as permission to invoke any additional MCP methods.
         if (payload && typeof payload === 'object' && !Array.isArray(payload) &&
-            payload.jsonrpc === '2.0' && !isVpcMcpProbe &&
+            payload.jsonrpc === '2.0' &&
             payload.method === 'server/discover' &&
             (typeof payload.id === 'string' || typeof payload.id === 'number')) {
           return json({jsonrpc:'2.0', id:payload.id,
@@ -337,27 +266,7 @@ export function createMcpRelay(config) {
             payload.jsonrpc !== '2.0' || !ALLOWED_METHODS.has(payload.method)) {
           return rpcError(payload,'MCP method is not allowed');
         }
-        if (isVpcMcpProbe) {
-          const args = payload.params?.arguments;
-          const emptyArgs = args && typeof args === 'object' &&
-            !Array.isArray(args) && Object.keys(args).length === 0;
-          const paramsKeys = payload.params &&
-            typeof payload.params === 'object' && !Array.isArray(payload.params)
-            ? Object.keys(payload.params) : [];
-          const probePing = payload.method === 'ping' &&
-            (payload.params === undefined ||
-             (payload.params && typeof payload.params === 'object' &&
-              !Array.isArray(payload.params) && paramsKeys.length === 0));
-          const probeRead = payload.method === 'tools/call' &&
-            payload.params?.name === 'getAccessibleAtlassianResources' &&
-            emptyArgs && paramsKeys.length === 2 &&
-            paramsKeys.includes('name') && paramsKeys.includes('arguments');
-          if (!(typeof payload.id === 'number' || typeof payload.id === 'string') ||
-              (!probePing && !probeRead)) {
-            return rpcError(payload,'VPC diagnostic method is not allowed');
-          }
-        }
-        if (payload.method === 'tools/call' && !tools.has(payload.params?.name)) {
+        if (payload.method === 'tools/call' && !permittedTools.has(payload.params?.name)) {
           return rpcError(payload,'MCP tool is not on the allowlist');
         }
         isToolList = payload.method === 'tools/list';
@@ -382,16 +291,11 @@ export function createMcpRelay(config) {
           ...(request.method === 'POST' ? {body: requestBody} : {}),
           redirect:'manual',
         };
-        const response = isVpcMcpProbe || route.transport === 'vpc'
+        const response = route.transport === 'vpc'
           ? await env.ATLASSIAN_RELAY_VPC.fetch(route.url.toString(),fetchOptions)
           : await fetch(route.url.toString(),fetchOptions);
         if (response.status === 401 || response.status === 403) {
-          if (env.UPSTREAM_DENIAL_DIAGNOSTICS === 'on') {
-            try {await diagnoseUpstreamDenial(response);}
-            catch {try {await response.body?.cancel();} catch { /* best effort */ }}
-          } else {
-            await response.body?.cancel();
-          }
+          await response.body?.cancel();
           return json({error:'upstream_authorization_failed'},502);
         }
         if (response.status >= 300 && response.status < 400) {
@@ -399,7 +303,7 @@ export function createMcpRelay(config) {
           return json({error:'unexpected_upstream_redirect'},502);
         }
         // Filtering must happen before returning any bytes to the caller.
-        if (isToolList) return await filteredToolListResponse(response,tools);
+        if (isToolList) return await filteredToolListResponse(response,permittedTools);
         const responseHeaders = new Headers();
         for (const key of RESPONSE_HEADERS) {
           const value = response.headers.get(key);
