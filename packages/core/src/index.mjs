@@ -225,7 +225,8 @@ export function createMcpRelay(config) {
       }
       // Independent private-route liveness probe. It never switches /mcp,
       // forwards credentials, or exposes the relay's response body.
-      if (url.pathname !== '/mcp' && url.pathname !== '/health/vpc') {
+      if (url.pathname !== '/mcp' && url.pathname !== '/health/vpc' &&
+          url.pathname !== '/mcp/vpc') {
         return json({error:'not_found'},404);
       }
       if (!['GET','POST','DELETE'].includes(request.method)) {
@@ -258,7 +259,22 @@ export function createMcpRelay(config) {
           return json({error:'vpc_health_unavailable'},502);
         }
       }
-      const route=getRoute(env,upstream);
+      const isVpcMcpProbe = url.pathname === '/mcp/vpc';
+      if (isVpcMcpProbe && request.method !== 'POST') {
+        return json({error:'method_not_allowed'},405);
+      }
+      // The probe is deliberately restricted to two side-effect-free MCP
+      // operations. /mcp continues to use the legacy public Access route.
+      const route = isVpcMcpProbe
+        ? (env.ATLASSIAN_RELAY_VPC &&
+           typeof env.ATLASSIAN_RELAY_VPC.fetch === 'function' &&
+           typeof env.LOCAL_RELAY_BEARER_TOKEN === 'string' &&
+           env.LOCAL_RELAY_BEARER_TOKEN.length >= 32
+          ? {url:new URL('http://127.0.0.1/mcp'),
+             authorization:'Bearer '+env.LOCAL_RELAY_BEARER_TOKEN,
+             access:null}
+          : null)
+        : getRoute(env,upstream);
       if (!route) return json({error:'upstream_not_configured'},503);
 
       let requestBody;
@@ -312,6 +328,26 @@ export function createMcpRelay(config) {
             payload.jsonrpc !== '2.0' || !ALLOWED_METHODS.has(payload.method)) {
           return rpcError(payload,'MCP method is not allowed');
         }
+        if (isVpcMcpProbe) {
+          const args = payload.params?.arguments;
+          const emptyArgs = args && typeof args === 'object' &&
+            !Array.isArray(args) && Object.keys(args).length === 0;
+          const paramsKeys = payload.params &&
+            typeof payload.params === 'object' && !Array.isArray(payload.params)
+            ? Object.keys(payload.params) : [];
+          const probePing = payload.method === 'ping' &&
+            (payload.params === undefined ||
+             (payload.params && typeof payload.params === 'object' &&
+              !Array.isArray(payload.params) && paramsKeys.length === 0));
+          const probeRead = payload.method === 'tools/call' &&
+            payload.params?.name === 'getAccessibleAtlassianResources' &&
+            emptyArgs && paramsKeys.length === 2 &&
+            paramsKeys.includes('name') && paramsKeys.includes('arguments');
+          if (!(typeof payload.id === 'number' || typeof payload.id === 'string') ||
+              (!probePing && !probeRead)) {
+            return rpcError(payload,'VPC diagnostic method is not allowed');
+          }
+        }
         if (payload.method === 'tools/call' && !tools.has(payload.params?.name)) {
           return rpcError(payload,'MCP tool is not on the allowlist');
         }
@@ -332,11 +368,14 @@ export function createMcpRelay(config) {
       if (!headers.has('accept')) headers.set('accept','application/json, text/event-stream');
       try {
         // Fixed URL; never forward caller-provided query strings or redirects.
-        const response = await fetch(route.url.toString(), {
+        const fetchOptions = {
           method: request.method, headers,
           ...(request.method === 'POST' ? {body: requestBody} : {}),
           redirect:'manual',
-        });
+        };
+        const response = isVpcMcpProbe
+          ? await env.ATLASSIAN_RELAY_VPC.fetch(route.url.toString(),fetchOptions)
+          : await fetch(route.url.toString(),fetchOptions);
         if (response.status === 401 || response.status === 403) {
           if (env.UPSTREAM_DENIAL_DIAGNOSTICS === 'on') {
             try {await diagnoseUpstreamDenial(response);}
