@@ -464,3 +464,86 @@ test('successful MCP responses emit no upstream-denial diagnostic',async()=>{
     assert.deepEqual(events,[]);
   } finally {console.warn=originalWarn;}
 });
+
+
+test('vpc-health-probe requires Portal bearer and never uses public fetch',async()=>{
+  let used=0;
+  const onlyVPC={...env,ATLASSIAN_RELAY_VPC:{fetch:async()=>{used++;return Response.json({status:'alive'});}}};
+  await withFetch(async()=>{throw Error('public fetch must never be used');},async()=>{
+    for(const headers of [{},{authorization:'Bearer '+ 'x'.repeat(48)}]){
+      const response=await worker.fetch(new Request('https://bridge.example/health/vpc',{headers}),onlyVPC);
+      assert.equal(response.status,401);
+    }
+    assert.equal(used,0);
+    const denied=await worker.fetch(new Request('https://bridge.example/health/vpc',{
+      method:'POST',headers:auth
+    }),onlyVPC);
+    assert.equal(denied.status,405);
+    assert.equal(used,0);
+  });
+});
+
+test('vpc-health-probe reports transport-only liveness without exposing relay data',async()=>{
+  let vpcCalls=0;
+  const secret='DO_NOT_EXPOSE_RELAY_BODY';
+  const secretURL='https://attacker.invalid/health';
+  const onlyVPC={...env,ATLASSIAN_RELAY_VPC:{
+    async fetch(url,options) {
+      vpcCalls++;
+      assert.equal(url,'http://127.0.0.1/health');
+      assert.equal(options.method,'GET');
+      assert.equal(options.redirect,'manual');
+      assert.equal(options.headers.accept,'application/json');
+      assert.equal(options.headers.authorization,undefined);
+      assert.equal(options.headers.cookie,undefined);
+      assert.ok(options.signal);
+      return new Response(JSON.stringify({secret,origin:secretURL}),{
+        status:200,headers:{'content-type':'application/json','set-cookie':'private'}});
+    }
+  }};
+  await withFetch(async()=>{throw Error('public fetch must never be used');},async()=>{
+    const response=await worker.fetch(new Request('https://bridge.example/health/vpc?destination='+encodeURIComponent(secretURL),{
+      headers:{...auth,cookie:secret,'cf-access-client-secret':secret}
+    }),onlyVPC);
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('cache-control'),'no-store');
+    assert.equal(response.headers.get('set-cookie'),null);
+    assert.deepEqual(await response.json(),{service:'atlassian-rovo-mcp-bridge',
+      phase:'vpc-transport-only',status:'reachable',upstreamConnection:'not_verified'});
+  });
+  assert.equal(vpcCalls,1);
+});
+
+test('vpc-health-probe fails closed for missing binding, non-200, errors',async()=>{
+  const uri='https://bridge.example/health/vpc';
+  const unbound=await worker.fetch(new Request(uri,{headers:auth}),env);
+  assert.equal(unbound.status,503);
+  assert.deepEqual(await unbound.json(),{error:'vpc_binding_not_configured'});
+  for (const status of [302,401,403,404,500]) {
+    const r=await worker.fetch(new Request(uri,{headers:auth}),{
+      ...env,ATLASSIAN_RELAY_VPC:{fetch:async()=>new Response('SECRET_FROM_UPSTREAM',{
+        status,headers:{'location':'https://attacker.invalid'}})},
+    });
+    assert.equal(r.status,502);
+    assert.deepEqual(await r.json(),{error:'vpc_health_unavailable'});
+    assert.equal(r.headers.get('location'),null);
+  }
+  const err=await worker.fetch(new Request(uri,{headers:auth}),{
+    ...env,ATLASSIAN_RELAY_VPC:{fetch:async()=>{throw Error('SECRET_ERROR');}},
+  });
+  assert.equal(err.status,502);
+  assert.deepEqual(await err.json(),{error:'vpc_health_unavailable'});
+});
+
+test('vpc-health-probe binding cannot alter normal MCP upstream selection',async()=>{
+  let publicCalls=0,vpcCalls=0;
+  await withFetch(async(url)=>{publicCalls++;assert.equal(String(url),'https://mcp.atlassian.com/v2/mcp');
+    return Response.json({jsonrpc:'2.0',id:1,result:{}});},async()=>{
+    const r=await worker.fetch(request('POST',call('ping'),auth),{
+      ...env,ATLASSIAN_RELAY_VPC:{fetch:async()=>{vpcCalls++;throw Error('wrong path')}},
+    });
+    assert.equal(r.status,200);
+  });
+  assert.equal(publicCalls,1);
+  assert.equal(vpcCalls,0);
+});
