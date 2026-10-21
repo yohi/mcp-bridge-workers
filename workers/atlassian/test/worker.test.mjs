@@ -371,3 +371,96 @@ test('non-probe unknown MCP methods remain forbidden, never forwarded',async()=>
     assert.equal(notification.status,403);
   });
 });
+
+
+test('temporary upstream denial diagnostics contain classifications but no body or secrets',async()=>{
+  const origin={...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on',
+    ATLASSIAN_UPSTREAM_MODE:'local_relay',
+    LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example/',
+    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    CF_ACCESS_CLIENT_ID:'synthetic-client-id',
+    CF_ACCESS_CLIENT_SECRET:'synthetic-access-secret-12345678901234567890123'};
+  const originalWarn=console.warn;
+  const events=[];
+  console.warn=(line)=>events.push(line);
+  try {
+    await withFetch(async()=>new Response(
+      '<html>Cloudflare Access /cdn-cgi/access/ error code: 1042 '+
+      'DO_NOT_LOG_BODY_SECRET=some-credential</html>', {
+        status:403, headers:{
+          'content-type':'text/html; charset=utf-8',
+          'cf-ray':'SENSITIVE_RAY',
+          'cf-mitigated':'challenge',
+          'set-cookie':'SENSITIVE_COOKIE',
+        },
+      }),async()=>{
+        const result=await worker.fetch(request('POST',call('tools/call',
+          {name:'getAccessibleAtlassianResources',arguments:{}},99),auth),origin);
+        assert.equal(result.status,502);
+        assert.deepEqual(await result.json(),{error:'upstream_authorization_failed'});
+        assert.equal(result.headers.get('set-cookie'),null);
+        assert.equal(result.headers.get('cf-ray'),null);
+      });
+    assert.equal(events.length,1);
+    assert.ok(events[0].startsWith('MCP_UPSTREAM_DENIAL '));
+    const logged=JSON.parse(events[0].slice('MCP_UPSTREAM_DENIAL '.length));
+    assert.equal(logged.status,403);
+    assert.equal(logged.media_type,'html');
+    assert.equal(logged.cf_mitigated_challenge,true);
+    assert.equal(logged.cf_ray_present,true);
+    assert.equal(logged.access_marker,true);
+    assert.equal(logged.error_1042,true);
+    for(const privateValue of ['DO_NOT_LOG_BODY_SECRET','some-credential',
+      'SENSITIVE_RAY','SENSITIVE_COOKIE',origin.CF_ACCESS_CLIENT_SECRET,
+      origin.LOCAL_RELAY_BEARER_TOKEN,origin.PORTAL_BEARER_TOKEN]) {
+      assert.equal(events[0].includes(privateValue),false);
+    }
+  } finally {console.warn=originalWarn;}
+});
+
+test('diagnostic denial inspection is bounded and opt-in',async()=>{
+  const originalWarn=console.warn;
+  const events=[];
+  console.warn=(line)=>events.push(line);
+  try {
+    let consumed=0;
+    await withFetch(async()=>new Response(new ReadableStream({
+      pull(controller) {
+        consumed++;
+        controller.enqueue(new TextEncoder().encode('X'.repeat(40_000)));
+      },
+    }),{status:401,headers:{'content-type':'application/json'}}),async()=>{
+      const r=await worker.fetch(request('POST',call('ping'),auth),
+        {...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on'});
+      assert.equal(r.status,502);
+    });
+    assert.equal(events.length,1);
+    const logged=JSON.parse(events[0].slice('MCP_UPSTREAM_DENIAL '.length));
+    assert.equal(logged.media_type,'json');
+    assert.equal(logged.inspection_limit_reached,true);
+    assert.equal(logged.inspected_bytes,65_536);
+    assert.ok(consumed<=3);
+    events.length=0;
+    await withFetch(async()=>new Response('SECRET_SHOULD_NOT_BE_LOGGED',
+      {status:403,headers:{'content-type':'text/html'}}),async()=>{
+      const r=await worker.fetch(request('POST',call('ping'),auth),env);
+      assert.equal(r.status,502);
+      assert.equal((await r.json()).error,'upstream_authorization_failed');
+    });
+    assert.deepEqual(events,[]);
+  } finally {console.warn=originalWarn;}
+});
+
+test('successful MCP responses emit no upstream-denial diagnostic',async()=>{
+  const originalWarn=console.warn;
+  const events=[];
+  console.warn=(line)=>events.push(line);
+  try {
+    await withFetch(async()=>Response.json({jsonrpc:'2.0',id:5,result:{}}),async()=>{
+      const r=await worker.fetch(request('POST',call('ping',{},5),auth),
+        {...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on'});
+      assert.equal(r.status,200);
+    });
+    assert.deepEqual(events,[]);
+  } finally {console.warn=originalWarn;}
+});
