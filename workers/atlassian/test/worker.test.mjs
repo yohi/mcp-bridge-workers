@@ -67,9 +67,9 @@ test('allowed tool relayed; write and unknown tool names blocked before upstream
     forwarded++;
     return new Response('ok',{headers:{'content-type':'application/json'}});
   },async () => {
-    const allowed = await worker.fetch(request('POST',call('tools/call',{name:'executeRead'}),auth),env);
+    const allowed = await worker.fetch(request('POST',call('tools/call',{name:'getAccessibleAtlassianResources',arguments:{}}),auth),env);
     assert.equal(allowed.status,200);
-    for (const name of ['executeWrite','executeDestructive','unknown']) {
+    for (const name of ['executeWrite','executeDestructive','discover','executeRead','unknown']) {
       const denied = await worker.fetch(request('POST',call('tools/call',{name}),auth),env);
       assert.equal(denied.status,403);
       assert.equal((await denied.json()).error.code,-32001);
@@ -207,7 +207,7 @@ test('relay mode fails closed on missing or invalid credentials and URLs',async(
  });
 });
 
-test('tools/list exposes only the four allowed tools and retains schema and cursor',async()=>{
+test('tools/list defaults to proved metadata-only tools and preserves schema and cursor',async()=>{
   const upstreamTools=[
     {name:'atlassianUserInfo',description:'identity',inputSchema:{type:'object',properties:{}}},
     {name:'getAccessibleAtlassianResources',description:'sites',inputSchema:{type:'object'}},
@@ -234,7 +234,7 @@ test('tools/list exposes only the four allowed tools and retains schema and curs
     assert.equal(payload.id,7);
     assert.equal(payload.result.nextCursor,'next-page');
     assert.deepEqual(payload.result.tools.map(t=>t.name),
-      ['atlassianUserInfo','getAccessibleAtlassianResources','discover','executeRead']);
+      ['atlassianUserInfo','getAccessibleAtlassianResources']);
     assert.deepEqual(payload.result.tools[0],upstreamTools[0]);
     assert.ok(!JSON.stringify(payload).includes('executeWrite'));
     assert.ok(!JSON.stringify(payload).includes('executeDestructive'));
@@ -252,12 +252,12 @@ test('tools/list pagination still filters all subsequent pages',async()=>{
     }
     assert.deepEqual(rpc.params,{cursor:'page-2'});
     return Response.json({jsonrpc:'2.0',id:rpc.id,result:{tools:[
-      {name:'executeDestructive'},{name:'executeRead'}]}});
+      {name:'executeDestructive'},{name:'getAccessibleAtlassianResources'}]}});
   },async()=>{
     const first=await worker.fetch(request('POST',call('tools/list',{},9),auth),env);
     assert.deepEqual((await first.json()).result,{tools:[],nextCursor:'page-2'});
     const next=await worker.fetch(request('POST',call('tools/list',{cursor:'page-2'},10),auth),env);
-    assert.deepEqual((await next.json()).result,{tools:[{name:'executeRead'}]});
+    assert.deepEqual((await next.json()).result,{tools:[{name:'getAccessibleAtlassianResources'}]});
     assert.equal(page,2);
   });
 });
@@ -349,7 +349,7 @@ test('legacy probe fallback preserves authentication, initialize and tool visibi
       {protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'portal',version:'1'}},2),auth),env);
     assert.equal((await init.json()).result.protocolVersion,'2025-03-26');
     const list=await worker.fetch(request('POST',call('tools/list',{},3),auth),env);
-    assert.deepEqual((await list.json()).result.tools.map(t=>t.name),['executeRead','discover']);
+    assert.deepEqual((await list.json()).result.tools.map(t=>t.name),[]);
     const write=await worker.fetch(request('POST',call('tools/call',{name:'executeWrite'},4),auth),env);
     assert.equal(write.status,403);
     assert.equal(upstreamCalls,2);
@@ -370,99 +370,6 @@ test('non-probe unknown MCP methods remain forbidden, never forwarded',async()=>
       method:'server/discover'},auth),env);
     assert.equal(notification.status,403);
   });
-});
-
-
-test('temporary upstream denial diagnostics contain classifications but no body or secrets',async()=>{
-  const origin={...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on',
-    ATLASSIAN_UPSTREAM_MODE:'local_relay',
-    LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example/',
-    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
-    CF_ACCESS_CLIENT_ID:'synthetic-client-id',
-    CF_ACCESS_CLIENT_SECRET:'synthetic-access-secret-12345678901234567890123'};
-  const originalWarn=console.warn;
-  const events=[];
-  console.warn=(line)=>events.push(line);
-  try {
-    await withFetch(async()=>new Response(
-      '<html>Cloudflare Access /cdn-cgi/access/ error code: 1042 '+
-      'DO_NOT_LOG_BODY_SECRET=some-credential</html>', {
-        status:403, headers:{
-          'content-type':'text/html; charset=utf-8',
-          'cf-ray':'SENSITIVE_RAY',
-          'cf-mitigated':'challenge',
-          'set-cookie':'SENSITIVE_COOKIE',
-        },
-      }),async()=>{
-        const result=await worker.fetch(request('POST',call('tools/call',
-          {name:'getAccessibleAtlassianResources',arguments:{}},99),auth),origin);
-        assert.equal(result.status,502);
-        assert.deepEqual(await result.json(),{error:'upstream_authorization_failed'});
-        assert.equal(result.headers.get('set-cookie'),null);
-        assert.equal(result.headers.get('cf-ray'),null);
-      });
-    assert.equal(events.length,1);
-    assert.ok(events[0].startsWith('MCP_UPSTREAM_DENIAL '));
-    const logged=JSON.parse(events[0].slice('MCP_UPSTREAM_DENIAL '.length));
-    assert.equal(logged.status,403);
-    assert.equal(logged.media_type,'html');
-    assert.equal(logged.cf_mitigated_challenge,true);
-    assert.equal(logged.cf_ray_present,true);
-    assert.equal(logged.access_marker,true);
-    assert.equal(logged.error_1042,true);
-    for(const privateValue of ['DO_NOT_LOG_BODY_SECRET','some-credential',
-      'SENSITIVE_RAY','SENSITIVE_COOKIE',origin.CF_ACCESS_CLIENT_SECRET,
-      origin.LOCAL_RELAY_BEARER_TOKEN,origin.PORTAL_BEARER_TOKEN]) {
-      assert.equal(events[0].includes(privateValue),false);
-    }
-  } finally {console.warn=originalWarn;}
-});
-
-test('diagnostic denial inspection is bounded and opt-in',async()=>{
-  const originalWarn=console.warn;
-  const events=[];
-  console.warn=(line)=>events.push(line);
-  try {
-    let consumed=0;
-    await withFetch(async()=>new Response(new ReadableStream({
-      pull(controller) {
-        consumed++;
-        controller.enqueue(new TextEncoder().encode('X'.repeat(40_000)));
-      },
-    }),{status:401,headers:{'content-type':'application/json'}}),async()=>{
-      const r=await worker.fetch(request('POST',call('ping'),auth),
-        {...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on'});
-      assert.equal(r.status,502);
-    });
-    assert.equal(events.length,1);
-    const logged=JSON.parse(events[0].slice('MCP_UPSTREAM_DENIAL '.length));
-    assert.equal(logged.media_type,'json');
-    assert.equal(logged.inspection_limit_reached,true);
-    assert.equal(logged.inspected_bytes,65_536);
-    assert.ok(consumed<=3);
-    events.length=0;
-    await withFetch(async()=>new Response('SECRET_SHOULD_NOT_BE_LOGGED',
-      {status:403,headers:{'content-type':'text/html'}}),async()=>{
-      const r=await worker.fetch(request('POST',call('ping'),auth),env);
-      assert.equal(r.status,502);
-      assert.equal((await r.json()).error,'upstream_authorization_failed');
-    });
-    assert.deepEqual(events,[]);
-  } finally {console.warn=originalWarn;}
-});
-
-test('successful MCP responses emit no upstream-denial diagnostic',async()=>{
-  const originalWarn=console.warn;
-  const events=[];
-  console.warn=(line)=>events.push(line);
-  try {
-    await withFetch(async()=>Response.json({jsonrpc:'2.0',id:5,result:{}}),async()=>{
-      const r=await worker.fetch(request('POST',call('ping',{},5),auth),
-        {...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on'});
-      assert.equal(r.status,200);
-    });
-    assert.deepEqual(events,[]);
-  } finally {console.warn=originalWarn;}
 });
 
 
@@ -549,107 +456,6 @@ test('vpc-health-probe binding cannot alter normal MCP upstream selection',async
 });
 
 
-test('vpc-MCP-probe sends only ping to VPC and never to the public origin',async()=>{
-  let vpcCalls=0;
-  const diag={...env,ATLASSIAN_RELAY_VPC:{
-    async fetch(url,options) {
-      vpcCalls++;
-      assert.equal(url,'http://127.0.0.1/mcp');
-      assert.equal(options.method,'POST');
-      assert.equal(options.headers.get('authorization'),'Bearer '+'r'.repeat(48));
-      assert.equal(options.headers.get('cf-access-client-id'),null);
-      assert.equal(options.headers.get('cf-access-client-secret'),null);
-      assert.equal(options.headers.get('cookie'),null);
-      assert.equal(JSON.parse(new TextDecoder().decode(options.body)).method,'ping');
-      return Response.json({jsonrpc:'2.0',id:'diag-ping',result:{}});
-    }
-  },LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48)};
-  await withFetch(async()=>{throw Error('public origin should not be used');},async()=>{
-    const ok=await worker.fetch(new Request('https://bridge.example/mcp/vpc',{
-      method:'POST',headers:{...auth,'content-type':'application/json',cookie:'dont-forward'},
-      body:JSON.stringify(call('ping',{},'diag-ping'))
-    }),diag);
-    assert.equal(ok.status,200);
-    assert.equal((await ok.json()).result.constructor,Object);
-  });
-  assert.equal(vpcCalls,1);
-});
-
-test('vpc-MCP-probe only allows argument-free resource discovery and ping',async()=>{
-  let forwardCount=0;
-  const diag={...env,ATLASSIAN_RELAY_VPC:{async fetch(_url,opts){
-    forwardCount++;
-    const payload=JSON.parse(new TextDecoder().decode(opts.body));
-    assert.equal(payload.method,'tools/call');
-    assert.equal(payload.params.name,'getAccessibleAtlassianResources');
-    assert.deepEqual(payload.params.arguments,{});
-    return Response.json({jsonrpc:'2.0',id:payload.id,result:{resources:[]}});
-  }},LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48)};
-  const req=(payload,method='POST')=>new Request('https://bridge.example/mcp/vpc',{
-    method,headers:{...auth,'content-type':'application/json'},
-    ...(method==='POST'?{body:JSON.stringify(payload)}:{})
-  });
-  const denied=[
-    call('tools/list',{},7),
-    call('initialize',{},8),
-    call('notifications/initialized',{},9),
-    call('tools/call',{name:'executeRead',arguments:{}},10),
-    call('tools/call',{name:'executeWrite',arguments:{}},11),
-    call('tools/call',{name:'getAccessibleAtlassianResources',arguments:{unexpected:'x'}},12),
-    call('tools/call',{name:'getAccessibleAtlassianResources',arguments:{},extra:'x'},13),
-    call('tools/call',{name:'getAccessibleAtlassianResources'},14),
-    call('server/discover',{},15),
-  ];
-  await withFetch(async()=>{throw Error('public fetch must not be called');},async()=>{
-    for(const payload of denied){
-      const res=await worker.fetch(req(payload),diag);
-      assert.equal(res.status,403,payload.method);
-    }
-    for(const method of ['GET','DELETE']){
-      const res=await worker.fetch(req(null,method),diag);
-      assert.equal(res.status,405);
-    }
-    const good=await worker.fetch(req(call('tools/call',{
-      name:'getAccessibleAtlassianResources',arguments:{}},16)),diag);
-    assert.equal(good.status,200);
-    assert.deepEqual((await good.json()).result,{resources:[]});
-  });
-  assert.equal(forwardCount,1);
-});
-
-test('vpc-MCP-probe requires bearer, VPC service and relay credential; fails closed',async()=>{
-  let vpcCalls=0;
-  const bound={...env,LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
-    ATLASSIAN_RELAY_VPC:{async fetch(){vpcCalls++;return Response.json({})}}};
-  const req=headers=>new Request('https://bridge.example/mcp/vpc',{
-    method:'POST',headers:{'content-type':'application/json',...headers},
-    body:JSON.stringify(call('ping',{},1))
-  });
-  assert.equal((await worker.fetch(req(),bound)).status,401);
-  assert.equal((await worker.fetch(req(auth),env)).status,503);
-  assert.equal((await worker.fetch(req(auth),{...bound,LOCAL_RELAY_BEARER_TOKEN:''})).status,503);
-  assert.equal((await worker.fetch(req(auth),{...bound,ATLASSIAN_RELAY_VPC:null})).status,503);
-  assert.equal(vpcCalls,0);
-  const fault=await worker.fetch(req(auth),{...bound,
-    ATLASSIAN_RELAY_VPC:{fetch:async()=>{throw Error('PRIVATE_EXCEPTION')}}});
-  assert.equal(fault.status,502);
-  assert.deepEqual(await fault.json(),{error:'upstream_unavailable'});
-});
-
-test('vpc-MCP-probe never passes upstream challenge or relay bearer to client',async()=>{
-  const diag={...env,LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
-    ATLASSIAN_RELAY_VPC:{fetch:async()=>new Response('SECRET_BODY',{
-      status:403,headers:{'cf-mitigated':'challenge','set-cookie':'SECRET_COOKIE'}
-    })}};
-  const res=await worker.fetch(new Request('https://bridge.example/mcp/vpc',{
-    method:'POST',headers:{...auth,'content-type':'application/json'},
-    body:JSON.stringify(call('ping',{},1))}),diag);
-  assert.equal(res.status,502);
-  assert.deepEqual(await res.json(),{error:'upstream_authorization_failed'});
-  assert.equal(res.headers.get('cf-mitigated'),null);
-  assert.equal(res.headers.get('set-cookie'),null);
-});
-
 test('regular MCP transport uses fixed VPC Binding without sending Access credentials',async()=>{
   const privateEnv={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay_vpc',
     LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
@@ -696,7 +502,7 @@ test('regular MCP VPC mode preserves tools/list filtering and blocked tools/call
     const payload=await list.json();
     assert.equal(payload.result.nextCursor,'p2');
     assert.deepEqual(payload.result.tools.map(t=>t.name),
-      ['discover','getAccessibleAtlassianResources','executeRead']);
+      ['getAccessibleAtlassianResources']);
     for(const n of ['executeWrite','executeDestructive','unknown']){
       const denied=await worker.fetch(request('POST',
         call('tools/call',{name:n,arguments:{}},2),auth),privateEnv);
@@ -755,4 +561,62 @@ test('legacy public relay mode remains selectable with existing Access headers',
     const r=await worker.fetch(request('POST',call('ping',{},1),auth),orig);
     assert.equal(r.status,200);
   });
+});
+
+test('unverified nested tools require explicit opt-in for both listing and calling',async()=>{
+  const nested=['discover','executeRead'];
+  let upstreamCount=0;
+  await withFetch(async(_url,opts)=>{
+    upstreamCount++;
+    const payload=JSON.parse(new TextDecoder().decode(opts.body));
+    if(payload.method==='tools/list'){
+      return Response.json({jsonrpc:'2.0',id:payload.id,result:{tools:[
+        {name:'atlassianUserInfo'},{name:'getAccessibleAtlassianResources'},
+        {name:'discover'},{name:'executeRead'},{name:'executeWrite'}
+      ]}});
+    }
+    return Response.json({jsonrpc:'2.0',id:payload.id,result:{}});
+  },async()=>{
+    const noOptIn=await worker.fetch(request('POST',call('tools/list',{},1),auth),env);
+    assert.deepEqual((await noOptIn.json()).result.tools.map(t=>t.name),
+      ['atlassianUserInfo','getAccessibleAtlassianResources']);
+    for(const tool of nested){
+      const denied=await worker.fetch(request('POST',call('tools/call',{
+        name:tool,arguments:{name:'unapproved_operation'}},2),auth),env);
+      assert.equal(denied.status,403);
+    }
+    const optIn={...env,ATLASSIAN_UNVERIFIED_READ_TOOLS:'on'};
+    const visible=await worker.fetch(request('POST',call('tools/list',{},3),auth),optIn);
+    assert.deepEqual((await visible.json()).result.tools.map(t=>t.name),
+      ['atlassianUserInfo','getAccessibleAtlassianResources','discover','executeRead']);
+    for(const tool of nested){
+      const accepted=await worker.fetch(request('POST',call('tools/call',{
+        name:tool,arguments:{}},4),auth),optIn);
+      assert.equal(accepted.status,200);
+    }
+  });
+  assert.equal(upstreamCount,4);
+});
+
+test('temporary MCP diagnostics have been removed while authenticated health/vpc remains',async()=>{
+  const secret='secret';
+  const routes=['/mcp/vpc'];
+  for(const path of routes){
+    const res=await worker.fetch(new Request('https://bridge.example'+path,{
+      method:'POST',headers:{...auth,'content-type':'application/json'},
+      body:JSON.stringify(call('ping',{},1))}),env);
+    assert.equal(res.status,404);
+  }
+  let warned=0;
+  const old=console.warn;
+  console.warn=()=>{warned++};
+  try{
+    await withFetch(async()=>new Response(secret,{status:403}),async()=>{
+      const r=await worker.fetch(request('POST',call('ping',{},1),auth),{
+        ...env,UPSTREAM_DENIAL_DIAGNOSTICS:'on'});
+      assert.equal(r.status,502);
+      assert.deepEqual(await r.json(),{error:'upstream_authorization_failed'});
+    });
+  }finally{console.warn=old;}
+  assert.equal(warned,0);
 });
