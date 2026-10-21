@@ -649,3 +649,110 @@ test('vpc-MCP-probe never passes upstream challenge or relay bearer to client',a
   assert.equal(res.headers.get('cf-mitigated'),null);
   assert.equal(res.headers.get('set-cookie'),null);
 });
+
+test('regular MCP transport uses fixed VPC Binding without sending Access credentials',async()=>{
+  const privateEnv={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay_vpc',
+    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    CF_ACCESS_CLIENT_ID:'still-present-client-id',
+    CF_ACCESS_CLIENT_SECRET:'still-present-but-not-forwarded-secret',
+    LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/',
+    ATLASSIAN_RELAY_VPC:{fetch:async(url,opts)=>{
+      assert.equal(String(url),'http://127.0.0.1/mcp');
+      assert.equal(opts.method,'POST');
+      assert.equal(opts.redirect,'manual');
+      assert.equal(opts.headers.get('authorization'),'Bearer '+'r'.repeat(48));
+      assert.equal(opts.headers.get('cf-access-client-id'),null);
+      assert.equal(opts.headers.get('cf-access-client-secret'),null);
+      assert.equal(opts.headers.get('cookie'),null);
+      assert.equal(JSON.parse(new TextDecoder().decode(opts.body)).method,'initialize');
+      return Response.json({jsonrpc:'2.0',id:1,result:{protocolVersion:'2025-03-26'}});
+    }}};
+  await withFetch(async()=>{throw Error('public upstream must not be called');},async()=>{
+    const r=await worker.fetch(request('POST',
+      call('initialize',{protocolVersion:'2025-03-26',capabilities:{},
+        clientInfo:{name:'test',version:'1'}},1),
+      {...auth,cookie:'never-forward'}),privateEnv);
+    assert.equal(r.status,200);
+    assert.equal((await r.json()).result.protocolVersion,'2025-03-26');
+  });
+});
+
+test('regular MCP VPC mode preserves tools/list filtering and blocked tools/call',async()=>{
+  let count=0;
+  const privateEnv={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay_vpc',
+    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    ATLASSIAN_RELAY_VPC:{fetch:async(_url,opts)=>{
+      count++;
+      assert.equal(JSON.parse(new TextDecoder().decode(opts.body)).method,'tools/list');
+      return Response.json({jsonrpc:'2.0',id:1,result:{nextCursor:'p2',tools:[
+        {name:'executeWrite',inputSchema:{type:'object'}},
+        {name:'executeDestructive',inputSchema:{type:'object'}},
+        {name:'discover',inputSchema:{type:'object'}},
+        {name:'getAccessibleAtlassianResources',inputSchema:{type:'object'}},
+        {name:'executeRead',inputSchema:{type:'object'}}]}});}}};
+  await withFetch(async()=>{throw Error('public upstream must not be called');},async()=>{
+    const list=await worker.fetch(request('POST',call('tools/list',{},1),auth),privateEnv);
+    assert.equal(list.status,200);
+    const payload=await list.json();
+    assert.equal(payload.result.nextCursor,'p2');
+    assert.deepEqual(payload.result.tools.map(t=>t.name),
+      ['discover','getAccessibleAtlassianResources','executeRead']);
+    for(const n of ['executeWrite','executeDestructive','unknown']){
+      const denied=await worker.fetch(request('POST',
+        call('tools/call',{name:n,arguments:{}},2),auth),privateEnv);
+      assert.equal(denied.status,403);
+    }
+    const unknown=await worker.fetch(request('POST',call('resources/list',{},3),auth),privateEnv);
+    assert.equal(unknown.status,403);
+  });
+  assert.equal(count,1);
+});
+
+test('regular MCP VPC failure is fail-closed, never falls back to public fetch',async()=>{
+  const base={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay_vpc',
+    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48)};
+  let publicCalls=0;
+  await withFetch(async()=>{publicCalls++;throw Error('public fallback forbidden');},async()=>{
+    for(const broken of [
+      {...base,ATLASSIAN_RELAY_VPC:null},
+      {...base,ATLASSIAN_RELAY_VPC:{}},
+      {...base,LOCAL_RELAY_BEARER_TOKEN:''},
+    ]){
+      const r=await worker.fetch(request('POST',call('ping',{},1),auth),broken);
+      assert.equal(r.status,503);
+      assert.equal((await r.json()).error,'upstream_not_configured');
+    }
+    const thrown=await worker.fetch(request('POST',call('ping',{},2),auth),{
+      ...base,ATLASSIAN_RELAY_VPC:{fetch:async()=>{throw Error('internal details');}}});
+    assert.equal(thrown.status,502);
+    assert.equal((await thrown.json()).error,'upstream_unavailable');
+    for(const status of [401,403,302]){
+      const r=await worker.fetch(request('POST',call('ping',{},3),auth),{
+        ...base,ATLASSIAN_RELAY_VPC:{fetch:async()=>new Response('PRIVATE',{
+          status,headers:{location:'https://bad.example/','www-authenticate':'Basic realm="private"'}})}});
+      assert.equal(r.status,502);
+      const b=await r.json();
+      assert.equal(b.error,status===302?'unexpected_upstream_redirect':'upstream_authorization_failed');
+      assert.equal(r.headers.get('location'),null);
+      assert.equal(r.headers.get('www-authenticate'),null);
+    }
+  });
+  assert.equal(publicCalls,0);
+});
+
+test('legacy public relay mode remains selectable with existing Access headers',async()=>{
+  const orig={...env,ATLASSIAN_UPSTREAM_MODE:'local_relay',
+    LOCAL_RELAY_BEARER_TOKEN:'r'.repeat(48),
+    CF_ACCESS_CLIENT_ID:'test-client-id',
+    CF_ACCESS_CLIENT_SECRET:'s'.repeat(48),
+    LOCAL_RELAY_ORIGIN:'https://atlassian-relay.example.com/'};
+  await withFetch(async(url,opts)=>{
+    assert.equal(String(url),'https://atlassian-relay.example.com/mcp');
+    assert.equal(opts.headers.get('cf-access-client-id'),'test-client-id');
+    assert.equal(opts.headers.get('cf-access-client-secret'),'s'.repeat(48));
+    return Response.json({jsonrpc:'2.0',id:1,result:{}});
+  },async()=>{
+    const r=await worker.fetch(request('POST',call('ping',{},1),auth),orig);
+    assert.equal(r.status,200);
+  });
+});
