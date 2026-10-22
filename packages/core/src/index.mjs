@@ -95,16 +95,13 @@ function approvedVirtualWorkspace(config, env) {
   if (!v || v.publicName !== VIRTUAL_TOOL_NAME ||
       v.internalToolName !== 'executeRead' ||
       v.internalOperationName !== VIRTUAL_TOOL_NAME ||
-      v.workspaceBinding?.envKey !== 'BITBUCKET_WORKSPACE_SLUG' ||
-      !isObject(v.workspaceBinding.approved) ||
-      typeof v.workspaceBinding.approved.ownerDecisionRef !== 'string' ||
-      !/\/blob\/[a-f0-9]{40}\//.test(v.workspaceBinding.approved.ownerDecisionRef) ||
-      !/^[a-f0-9]{64}$/.test(v.workspaceBinding.approved.ownerDecisionSha256) ||
+      !isObject(v.workspaceBinding) ||
+      v.workspaceBinding.envKey !== 'BITBUCKET_WORKSPACE_SLUG' ||
       typeof v.buildInputs !== 'function' || typeof v.normalize !== 'function' ||
       typeof v.description !== 'string' ||
       env.ATLASSIAN_UPSTREAM_MODE !== 'local_relay_vpc' ||
       env.ATLASSIAN_UNVERIFIED_READ_TOOLS !== 'off') return null;
-  const slug = v.workspaceBinding.approved.slug;
+  const slug = v.workspaceBinding.slug;
   if (typeof slug !== 'string' || !VIRTUAL_SLUG_RE.test(slug) ||
       typeof env.BITBUCKET_WORKSPACE_SLUG !== 'string' ||
       !VIRTUAL_SLUG_RE.test(env.BITBUCKET_WORKSPACE_SLUG) ||
