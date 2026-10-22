@@ -6,25 +6,68 @@ const MAX_SLUG_BYTES = 128;
 const byteLength = s => new TextEncoder().encode(s).length;
 const plainObject = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 
-// GitHub code/config alone does not establish an Owner approval.
-// These must be replaced only after a separately documented Owner approval.
-// While the ref/hash are empty and Wrangler lacks BITBUCKET_WORKSPACE_SLUG,
-// the generic Core *will not* advertise or execute the virtual operation.
+// The effective OAuth session determines which Bitbucket workspaces are accessible.
+// The bridge publishes only these two read operations, never generic executeRead.
 export const bitbucketVirtualTool = Object.freeze({
   publicName: 'listBitbucketRepositories',
-  description: 'List up to 25 repositories from the approved Bitbucket workspace (first page only).',
+  description: 'List up to 25 repositories in a Workspace allowed by the current Atlassian OAuth session.',
+  workspaceListName: 'listBitbucketWorkspaces',
+  workspaceListDescription: 'List up to 25 Bitbucket Workspaces visible to the authenticated Atlassian user.',
   inputSchema: {type:'object',properties:{},additionalProperties:false},
   internalToolName: 'executeRead',
   internalOperationName: 'listBitbucketRepositories',
-  workspaceBinding: Object.freeze({
-    approved: Object.freeze({
-      slug: 'diamondhead',
-      ownerDecisionRef: '',
-      ownerDecisionSha256: '',
-    }),
-    envKey: 'BITBUCKET_WORKSPACE_SLUG',
-  }),
+  // This is deliberately NOT an allowlist: Atlassian OAuth permissions are
+  // checked by Rovo on every invocation, not inferred from a GitHub setting.
   buildInputs: ({workspace}) => ({workspaceId:workspace,page:1,pagelen:MAX_REPOSITORIES}),
+  buildWorkspaceInputs: () => ({}),
+  normalizeWorkspaces: result => {
+    if (!plainObject(result) || result.isError === true) throw Error('bad_result');
+    const candidates=[result.structuredContent,result];
+    if (result.content !== undefined) {
+      if (!Array.isArray(result.content) || result.content.length > 4) throw Error('bad_content');
+      for (const item of result.content) {
+        if (!plainObject(item) || item.type !== 'text' || typeof item.text !== 'string') {
+          throw Error('bad_content');
+        }
+        try {candidates.push(JSON.parse(item.text));}
+        catch {throw Error('unparseable_content');}
+      }
+    }
+    const pages=[];
+    for (const candidate of candidates) {
+      if (!plainObject(candidate)) continue;
+      if (Array.isArray(candidate.values) || Array.isArray(candidate.workspaces)) {
+        pages.push(candidate);
+      } else if (plainObject(candidate.data) &&
+            (Array.isArray(candidate.data.values) || Array.isArray(candidate.data.workspaces))) {
+        pages.push(candidate.data);
+      }
+    }
+    if (pages.length !== 1) throw Error('ambiguous_page_shape');
+    const data=pages[0];
+    const rows=Array.isArray(data.values)?data.values:data.workspaces;
+    if (!Array.isArray(rows)) throw Error('bad_workspaces');
+    if (!(data.next===undefined || data.next===null || typeof data.next==='string')) {
+      throw Error('bad_pagination');
+    }
+    if (typeof data.next==='string' && data.next.length>4096) throw Error('bad_pagination');
+    if (data.nextPage!==undefined && typeof data.nextPage!=='boolean') {
+      throw Error('bad_pagination');
+    }
+    const workspacePattern=/^[a-z0-9][a-z0-9_-]{0,62}$/;
+    const workspaces=rows.slice(0,MAX_REPOSITORIES).map(r=>{
+      if (!plainObject(r)) throw Error('invalid_workspace');
+      const slug=typeof r.slug==='string'?r.slug:r.workspace?.slug;
+      if (typeof slug!=='string' || !workspacePattern.test(slug)) {
+        throw Error('invalid_workspace');
+      }
+      return {slug};
+    });
+    return {
+      schemaVersion:1,workspaces,
+      truncated:rows.length>MAX_REPOSITORIES || Boolean(data.next) || data.nextPage===true,
+    };
+  },
   normalize: (result,{workspace}) => {
     if (!plainObject(result) || result.isError === true) throw Error('bad_result');
     const candidates = [result.structuredContent,result];

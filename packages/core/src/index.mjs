@@ -84,41 +84,39 @@ const MAX_TOOL_LIST_RESPONSE_BYTES = 2_097_152;
 const MAX_VIRTUAL_REPLY_BYTES = 262_144;
 const MAX_VIRTUAL_OUTPUT_BYTES = 65_536;
 const VIRTUAL_TOOL_NAME = 'listBitbucketRepositories';
+const VIRTUAL_WORKSPACES_NAME = 'listBitbucketWorkspaces';
 const VIRTUAL_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 const isObject = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 function virtualError(id, status, code, message) {
   return json({jsonrpc:'2.0',id:id ?? null,error:{code,message}},status);
 }
-function approvedVirtualWorkspace(config, env) {
-  const v = config.virtualTool;
-  if (!v || v.publicName !== VIRTUAL_TOOL_NAME ||
-      v.internalToolName !== 'executeRead' ||
-      v.internalOperationName !== VIRTUAL_TOOL_NAME ||
-      v.workspaceBinding?.envKey !== 'BITBUCKET_WORKSPACE_SLUG' ||
-      !isObject(v.workspaceBinding.approved) ||
-      typeof v.workspaceBinding.approved.ownerDecisionRef !== 'string' ||
-      !/\/blob\/[a-f0-9]{40}\//.test(v.workspaceBinding.approved.ownerDecisionRef) ||
-      !/^[a-f0-9]{64}$/.test(v.workspaceBinding.approved.ownerDecisionSha256) ||
-      typeof v.buildInputs !== 'function' || typeof v.normalize !== 'function' ||
-      typeof v.description !== 'string' ||
-      env.ATLASSIAN_UPSTREAM_MODE !== 'local_relay_vpc' ||
-      env.ATLASSIAN_UNVERIFIED_READ_TOOLS !== 'off') return null;
-  const slug = v.workspaceBinding.approved.slug;
-  if (typeof slug !== 'string' || !VIRTUAL_SLUG_RE.test(slug) ||
-      typeof env.BITBUCKET_WORKSPACE_SLUG !== 'string' ||
-      !VIRTUAL_SLUG_RE.test(env.BITBUCKET_WORKSPACE_SLUG) ||
-      env.BITBUCKET_WORKSPACE_SLUG !== slug) return null;
-  return slug;
+function virtualToolsEnabled(config,env) {
+  const v=config.virtualTool;
+  return Boolean(v && v.publicName === VIRTUAL_TOOL_NAME &&
+    v.workspaceListName === VIRTUAL_WORKSPACES_NAME &&
+    v.internalToolName === 'executeRead' &&
+    v.internalOperationName === VIRTUAL_TOOL_NAME &&
+    typeof v.buildInputs === 'function' &&
+    typeof v.buildWorkspaceInputs === 'function' &&
+    typeof v.normalize === 'function' &&
+    typeof v.normalizeWorkspaces === 'function' &&
+    typeof v.description === 'string' &&
+    typeof v.workspaceListDescription === 'string' &&
+    env.ATLASSIAN_UPSTREAM_MODE === 'local_relay_vpc' &&
+    env.ATLASSIAN_UNVERIFIED_READ_TOOLS === 'off');
 }
 function validateVirtualCall(payload) {
   if (!Object.hasOwn(payload,'id') ||
       !(typeof payload.id === 'string' && payload.id.length > 0 ||
         typeof payload.id === 'number' && Number.isFinite(payload.id))) return false;
-  const p = payload.params;
-  return isObject(p) && Object.keys(p).length === 2 &&
-    p.name === VIRTUAL_TOOL_NAME &&
-    isObject(p.arguments) && Object.keys(p.arguments).length === 0;
+  const p=payload.params;
+  if (!isObject(p) || Object.keys(p).length!==2 || !isObject(p.arguments)) return false;
+  if (p.name===VIRTUAL_WORKSPACES_NAME) return Object.keys(p.arguments).length===0;
+  return p.name===VIRTUAL_TOOL_NAME &&
+    Object.keys(p.arguments).length===1 &&
+    typeof p.arguments.workspaceId==='string' &&
+    VIRTUAL_SLUG_RE.test(p.arguments.workspaceId);
 }
 function firstToolListPage(payload) {
   if (!Object.hasOwn(payload,'id') ||
@@ -126,9 +124,16 @@ function firstToolListPage(payload) {
   if (payload.params === undefined) return true;
   return isObject(payload.params) && Object.keys(payload.params).length === 0;
 }
-function virtualDescriptor(v) {
-  return {name:VIRTUAL_TOOL_NAME,description:v.description,
-    inputSchema:{type:'object',properties:{},additionalProperties:false}};
+function virtualDescriptors(v) {
+  return [
+    {name:VIRTUAL_WORKSPACES_NAME,description:v.workspaceListDescription,
+      inputSchema:{type:'object',properties:{},additionalProperties:false}},
+    {name:VIRTUAL_TOOL_NAME,description:v.description,
+      inputSchema:{type:'object',
+        properties:{workspaceId:{type:'string',pattern:VIRTUAL_SLUG_RE.source,
+          description:'Workspace slug returned by listBitbucketWorkspaces'}},
+        required:['workspaceId'],additionalProperties:false}},
+  ];
 }
 async function readBoundedJson(response, limit) {
   const cl = response.headers.get('content-length');
@@ -154,20 +159,28 @@ async function readBoundedJson(response, limit) {
   for (const chunk of chunks) {bytes.set(chunk,at);at += chunk.byteLength;}
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
 }
-async function handleVirtualTool({payload, route, headers, env, config, workspace}) {
+async function handleVirtualTool({payload, route, headers, env, config}) {
   const id = payload.id;
+  const workspaces = payload.params.name === VIRTUAL_WORKSPACES_NAME;
+  const workspace = workspaces ? null : payload.params.arguments.workspaceId;
   let args;
   try {
-    args = config.virtualTool.buildInputs(Object.freeze({workspace}));
-    if (!isObject(args) || Object.keys(args).some(k=>!['workspaceId','page','pagelen'].includes(k)) ||
-        Object.keys(args).length !== 3 || args.workspaceId !== workspace ||
-        args.page !== 1 || args.pagelen !== 25) throw Error('invalid_inputs');
+    args = workspaces ? config.virtualTool.buildWorkspaceInputs() :
+      config.virtualTool.buildInputs(Object.freeze({workspace}));
+    if (!isObject(args)) throw Error('invalid_inputs');
+    if (workspaces) {
+      if (Object.keys(args).length !== 0) throw Error('invalid_inputs');
+    } else if (Object.keys(args).length !== 3 || args.workspaceId !== workspace ||
+        args.page !== 1 || args.pagelen !== 25 ||
+        Object.keys(args).some(k=>!['workspaceId','page','pagelen'].includes(k))) {
+      throw Error('invalid_inputs');
+    }
   } catch {
     return virtualError(id,503,-32050,'Bitbucket read route not configured');
   }
   const rpc={jsonrpc:'2.0',id,method:'tools/call',
     params:{name:'executeRead',
-      arguments:{name:VIRTUAL_TOOL_NAME,inputs:args}}};
+      arguments:{name:workspaces ? VIRTUAL_WORKSPACES_NAME : VIRTUAL_TOOL_NAME,inputs:args}}};
   headers.set('content-type','application/json');
   headers.set('accept','application/json');
   let response;
@@ -215,10 +228,18 @@ async function handleVirtualTool({payload, route, headers, env, config, workspac
   }
   let page;
   try {
-    page=config.virtualTool.normalize(body.result,Object.freeze({workspace}));
-    if (!isObject(page) || page.schemaVersion !== 1 || page.workspace !== workspace ||
-        !Array.isArray(page.repositories) || page.repositories.length>25 ||
+    page=workspaces
+      ? config.virtualTool.normalizeWorkspaces(body.result)
+      : config.virtualTool.normalize(body.result,Object.freeze({workspace}));
+    if (!isObject(page) || page.schemaVersion !== 1 ||
         typeof page.truncated !== 'boolean') throw Error('bad_projection');
+    if (workspaces) {
+      if (!Array.isArray(page.workspaces) || page.workspaces.length>25 ||
+          page.workspaces.some(w=>!isObject(w) || !VIRTUAL_SLUG_RE.test(w.slug))) {
+        throw Error('bad_projection');
+      }
+    } else if (page.workspace!==workspace || !Array.isArray(page.repositories) ||
+               page.repositories.length>25) throw Error('bad_projection');
   } catch {
     return virtualError(id,502,-32054,'Bitbucket upstream response rejected');
   }
@@ -235,7 +256,7 @@ async function handleVirtualTool({payload, route, headers, env, config, workspac
  * upstream response, including SSE, malformed JSON and oversized bodies.
  * Keep pagination metadata intact; each tools/list page is filtered.
  */
-async function filteredToolListResponse(response, allowedTools, extraTool = null) {
+async function filteredToolListResponse(response, allowedTools, extraTools = []) {
   const type = response.headers.get('content-type') ?? '';
   if (response.status !== 200 || !/^application\/json(?:\s*;|$)/i.test(type)) {
     await response.body?.cancel();
@@ -278,7 +299,7 @@ async function filteredToolListResponse(response, allowedTools, extraTool = null
       Array.isArray(body.result) || !Array.isArray(body.result.tools)) {
     return json({error:'invalid_upstream_tool_list'},502);
   }
-  if (extraTool && body.result.tools.some(t=>t?.name===extraTool.name)) {
+  if (body.result.tools.some(t=>extraTools.some(extra=>t?.name===extra.name))) {
     return json({error:'invalid_upstream_tool_list'},502);
   }
   const filtered = {
@@ -286,7 +307,7 @@ async function filteredToolListResponse(response, allowedTools, extraTool = null
       tools: [...body.result.tools.filter(t =>
         t !== null && typeof t === 'object' &&
         typeof t.name === 'string' && allowedTools.has(t.name)),
-        ...(extraTool ? [extraTool] : [])],
+        ...extraTools],
     },
   };
   const headers = new Headers({
@@ -369,7 +390,7 @@ export function createMcpRelay(config) {
       let requestBody;
       let parsedPayload;
       let isVirtual = false;
-      let virtualWorkspace = null;
+      let virtualReady = false;
       let isToolList = false;
       let includeVirtualList = false;
       if (request.method === 'POST') {
@@ -422,15 +443,15 @@ export function createMcpRelay(config) {
             payload.jsonrpc !== '2.0' || !ALLOWED_METHODS.has(payload.method)) {
           return rpcError(payload,'MCP method is not allowed');
         }
-        virtualWorkspace = approvedVirtualWorkspace(config, env);
+        virtualReady = virtualToolsEnabled(config, env);
         const virtualRequested = payload.method === 'tools/call' &&
-          payload.params?.name === VIRTUAL_TOOL_NAME;
+          [VIRTUAL_TOOL_NAME,VIRTUAL_WORKSPACES_NAME].includes(payload.params?.name);
         if (virtualRequested && config.virtualTool) {
-          if (!virtualWorkspace) {
+          if (!virtualReady) {
             return virtualError(payload.id,503,-32050,'Bitbucket read route not configured');
           }
           if (!validateVirtualCall(payload)) {
-            return virtualError(payload.id,400,-32602,'Invalid listBitbucketRepositories arguments');
+            return virtualError(payload.id,400,-32602,'Invalid Bitbucket read arguments');
           }
           isVirtual = true;
         } else if (payload.method === 'tools/call' &&
@@ -438,7 +459,7 @@ export function createMcpRelay(config) {
           return rpcError(payload,'MCP tool is not on the allowlist');
         }
         isToolList = payload.method === 'tools/list';
-        includeVirtualList = isToolList && virtualWorkspace !== null &&
+        includeVirtualList = isToolList && virtualReady &&
           firstToolListPage(payload);
         parsedPayload = payload;
         requestBody = bytes;
@@ -458,7 +479,7 @@ export function createMcpRelay(config) {
       try {
         if (isVirtual) {
           return await handleVirtualTool({
-            payload:parsedPayload,route,headers,env,config,workspace:virtualWorkspace,
+            payload:parsedPayload,route,headers,env,config,
           });
         }
         // Fixed URL; never forward caller-provided query strings or redirects.
@@ -480,7 +501,7 @@ export function createMcpRelay(config) {
         }
         // Filtering must happen before returning any bytes to the caller.
         if (isToolList) return await filteredToolListResponse(response,permittedTools,
-          includeVirtualList ? virtualDescriptor(config.virtualTool) : null);
+          includeVirtualList ? virtualDescriptors(config.virtualTool) : []);
         const responseHeaders = new Headers();
         for (const key of RESPONSE_HEADERS) {
           const value = response.headers.get(key);

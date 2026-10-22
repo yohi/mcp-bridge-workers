@@ -38,16 +38,64 @@ See [Security](docs/security.md), [Architecture](docs/architecture.md), and [Ope
 - `tools/local-oauth`: Docker OAuth client, Tunnel connector, offline inspection utilities
 - `docs`: architecture, security, incident evidence and operator runbooks
 
-## Validate and deploy (operator only)
+## Deploy Atlassian Worker (manual GitHub Actions)
+
+Workspace access is determined by the existing Atlassian Rovo OAuth session,
+not by a value configured in GitHub or Cloudflare. Only two dedicated read
+operations are exported:
+
+- `listBitbucketWorkspaces({})`: return a bounded first page of workspaces
+  visible to the authenticated Atlassian user.
+- `listBitbucketRepositories({workspaceId: "workspace-slug"})`: read at most
+  25 repositories from a selected workspace. Atlassian validates the effective
+  OAuth scope and per-workspace permission for this operation. Workspace IDs
+  are not selected or granted by this Worker.
+
+These operations use the pre-existing private VPC relay and OAuth session.
+The Worker does **not** expose raw `discover`, general-purpose `executeRead`
+or any write/destructive tool. The current read-only workspace enumeration
+and payload shape are based on the official Rovo catalog; confirm
+`listBitbucketWorkspaces`'s exact descriptor and live response using the
+local OAuth session before depending on it in production.
+
+The deployment workflow is `Deploy Atlassian Worker`
+(`.github/workflows/deploy-atlassian.yml`) and is **manual-only on `master`**.
+Merging/pushing to `master` does **not** automatically deploy.
+
+One-time setup:
+
+1. Create an account-scoped Cloudflare API token with the minimum
+   **Edit Cloudflare Workers** permission for the intended deployment account.
+2. In GitHub repository **Settings → Secrets and variables → Actions**, set
+   repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+   **No Bitbucket Workspace variable is needed.**
+3. Confirm that the existing Cloudflare Worker `atlassian-rovo-mcp-bridge`
+   still has `PORTAL_BEARER_TOKEN` and `LOCAL_RELAY_BEARER_TOKEN` as
+   Worker secrets, and that its `ATLASSIAN_RELAY_VPC` binding is correct.
+4. After review and merge, open GitHub **Actions → Deploy Atlassian Worker →
+   Run workflow → master → Run workflow**.
+
+The workflow installs dependencies, runs Node tests, then runs the official
+`cloudflare/wrangler-action@v4` with the existing Wrangler config. It does not
+change OAuth grants, local Docker data, the Cloudflare Tunnel or Worker Bearer
+secrets. After deployment, refresh the connected ChatGPT MCP tool list and
+confirm that it contains only the two existing Atlassian metadata tools and
+the two Bitbucket read tools above. Check that Workspace discovery, a selected
+repository list and an unauthorized Workspace denial behave as expected.
+
+A green deployment is not proof of the live Rovo operation shape or the
+effective OAuth consent boundary.
+
+## Local validation
 
 ```sh
 git status --short
 npm install --ignore-scripts --no-audit --no-fund
 npm test
-# After reviewing the diff and confirming the destination account:
-npm run deploy:atlassian
 ```
 
-Do **not** run a deployment or overwrite local uncommitted changes solely to close a PR. Docker profiles for relay and Tunnel are independently opt-in; do not run `docker compose down -v`, regenerate saved secrets, or perform a new Atlassian DCR/OAuth consent flow for ordinary Worker maintenance.
-
-PR #2 remains **Draft until the cleanup commit is deployed and its reduced tool visibility is confirmed**. Its earlier production-connectivity success applies to the VPC cutover baseline, not automatically to later cleanup changes.
+Do **not** overwrite local uncommitted changes just to deploy. Docker profiles
+for Relay and Tunnel are independently opt-in; do not run `docker compose down -v`,
+regenerate saved secrets, or run new DCR/OAuth consent for Worker maintenance.
+The merged source and the currently deployed Worker can differ until a
+separate deploy occurs.
