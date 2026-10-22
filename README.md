@@ -40,10 +40,13 @@ See [Security](docs/security.md), [Architecture](docs/architecture.md), and [Ope
 
 ## Deploy Atlassian Worker (manual GitHub Actions)
 
-The Bitbucket virtual tool is **fixed to `diamondhead`** in Worker source and in the
-nonsecret `BITBUCKET_WORKSPACE_SLUG` Wrangler variable. No approval artifact,
-decision reference or digest is required. A mismatch disables the virtual tool.
-It lists the first page (up to 25 repos), with no caller-selected workspace.
+The Bitbucket virtual tool takes its workspace **only** from the deploy-time,
+nonsecret `BITBUCKET_WORKSPACE_SLUG` Wrangler variable (currently `diamondhead`).
+There is no workspace slug literal in Worker source and no approval artifact,
+decision reference or digest. A missing or invalid variable disables the virtual
+tool. It lists the first page (up to 25 repos), with no caller-selected workspace.
+To switch workspace, change the Wrangler variable and redeploy; the caller
+cannot change it per request.
 
 The deployment workflow is `Deploy Atlassian Worker`
 (`.github/workflows/deploy-atlassian.yml`), and is **manual-only on `master`**.
