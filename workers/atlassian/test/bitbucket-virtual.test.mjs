@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createMcpRelay} from '@mcp-bridge/core';
 import liveWorker from '../src/index.mjs';
 import {bitbucketVirtualTool} from '../src/bitbucket.mjs';
@@ -8,14 +9,7 @@ const portal='p'.repeat(48);
 const relay='r'.repeat(48);
 const vpcUrl='http://127.0.0.1/mcp';
 const workspace='diamondhead';
-const approval={
-  slug:workspace,
-  ownerDecisionRef:'https://github.com/yohi/mcp-bridge-workers/blob/'+'a'.repeat(40)+'/docs/owner-decision.md',
-  ownerDecisionSha256:'b'.repeat(64),
-};
-const enabledSpec={...bitbucketVirtualTool,workspaceBinding:{
-  approved:approval,envKey:'BITBUCKET_WORKSPACE_SLUG',
-}};
+const enabledSpec=bitbucketVirtualTool;
 const makeWorker=()=>createMcpRelay({
   name:'test-atlassian',upstreamUrl:'https://mcp.atlassian.com/v2/mcp',
   allowedTools:['atlassianUserInfo','getAccessibleAtlassianResources','discover','executeRead'],
@@ -45,22 +39,35 @@ async function invoke(worker,env,body) {
   const r=await worker.fetch(req(body),env);
   return {status:r.status,body:await r.json()};
 }
-test('unapproved production virtual tool remains invisible and fails closed',async()=>{
+test('production exposes fixed workspace only with matching Worker setting',async()=>{
   let calls=0;
-  const env=mockEnv(async()=>{calls++;return new Response(JSON.stringify({
+  const fetcher=async()=>{calls++;return new Response(JSON.stringify({
     jsonrpc:'2.0',id:1,result:{tools:[{name:'executeRead'}]},
-  }),{headers:{'content-type':'application/json'}});});
-  const list=await invoke(liveWorker,env,rpc('tools/list',{},1));
-  assert.equal(list.status,200);
-  assert.equal(list.body.result.tools.length,0);
-  const blocked=await invoke(liveWorker,env,rpc('tools/call',{
+  }),{headers:{'content-type':'application/json'}});};
+  const enabled=await invoke(liveWorker,mockEnv(fetcher),rpc('tools/list',{},1));
+  assert.equal(enabled.status,200);
+  assert.deepEqual(enabled.body.result.tools.map(t=>t.name),['listBitbucketRepositories']);
+
+  const missing=mockEnv(fetcher,{BITBUCKET_WORKSPACE_SLUG:undefined});
+  const hidden=await invoke(liveWorker,missing,rpc('tools/list',{},1));
+  assert.equal(hidden.status,200);
+  assert.deepEqual(hidden.body.result.tools,[]);
+  const blocked=await invoke(liveWorker,missing,rpc('tools/call',{
     name:'listBitbucketRepositories',arguments:{},
   },2));
   assert.equal(blocked.status,503);
   assert.equal(blocked.body.error.code,-32050);
-  assert.equal(calls,1);
+  assert.equal(calls,2);
 });
-test('approved binding exposes one virtual definition after allowed metadata only',async()=>{
+test('checked-in deployment config preserves VPC, nested-read denial and matching workspace',()=>{
+  const config=JSON.parse(readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8'));
+  assert.equal(config.vars.ATLASSIAN_UPSTREAM_MODE,'local_relay_vpc');
+  assert.equal(config.vars.ATLASSIAN_UNVERIFIED_READ_TOOLS,'off');
+  assert.equal(config.vars.BITBUCKET_WORKSPACE_SLUG,bitbucketVirtualTool.workspaceBinding.slug);
+  assert.equal(config.vpc_services[0].binding,'ATLASSIAN_RELAY_VPC');
+  assert.deepEqual(config.secrets.required,['PORTAL_BEARER_TOKEN','LOCAL_RELAY_BEARER_TOKEN']);
+});
+test('fixed binding exposes one virtual definition after allowed metadata only',async()=>{
   const seen=[];
   const env=mockEnv(async(url,opts)=>{
     seen.push({url,body:JSON.parse(new TextDecoder().decode(opts.body))});
