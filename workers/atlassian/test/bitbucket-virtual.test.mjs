@@ -63,9 +63,9 @@ test('unapproved production virtual tool remains invisible and fails closed',asy
 test('approved binding exposes one virtual definition after allowed metadata only',async()=>{
   const seen=[];
   const env=mockEnv(async(url,opts)=>{
-    seen.push({url,body:JSON.parse(opts.body)});
+    seen.push({url,body:JSON.parse(new TextDecoder().decode(opts.body))});
     return new Response(JSON.stringify({
-      jsonrpc:'2.0',id:opts.body?JSON.parse(opts.body).id:123,
+      jsonrpc:'2.0',id:opts.body?JSON.parse(new TextDecoder().decode(opts.body)).id:123,
       result:{tools:[
         {name:'executeRead'},{name:'executeWrite'},
         {name:'atlassianUserInfo'},{name:'getAccessibleAtlassianResources'},
@@ -179,7 +179,7 @@ test('virtual tool detects invalid HTTP, JSON-RPC IDs, schema drift and workspac
     [result(79,{next:123,values:[]}),502,-32054],
   ];
   for (const [upstream,status,code] of cases) {
-    const output=await invoke(w,mockEnv(async()=>upstream.clone()),call);
+    const output=await invoke(w,mockEnv(async()=>upstream),call);
     assert.equal(output.status,status);
     assert.equal(output.body.error.code,code);
     assert.equal(JSON.stringify(output.body).includes('evil.example'),false);
