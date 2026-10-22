@@ -78,6 +78,21 @@ test('workspace list uses current relay OAuth session, no external workspace val
     schemaVersion:1,workspaces:[{slug:workspace},{slug:'other-workspace'}],truncated:true});
   assert.equal(calls,1);
 });
+test('live-observed text.json.data.values shape returns only OAuth workspace slugs',async()=>{
+  const upstream=async()=>jsonRpc(14,{
+    data:{values:[{uuid:'{synthetic-workspace-uuid}',slug:workspace}]},
+  });
+  const response=await invoke(worker,env(upstream),rpc('tools/call',{
+    name:'listBitbucketWorkspaces',arguments:{},
+  },14));
+  assert.equal(response.status,200);
+  assert.deepEqual(JSON.parse(response.body.result.content[0].text),{
+    schemaVersion:1,
+    workspaces:[{slug:workspace}],
+    truncated:false,
+  });
+  assert.equal(JSON.stringify(response.body).includes('synthetic-workspace-uuid'),false);
+});
 test('repository list uses explicit workspaceId, OAuth still decides authorization',async()=>{
   let calls=0;
   const transport=async(url,opts)=>{
