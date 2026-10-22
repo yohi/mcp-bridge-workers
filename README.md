@@ -40,13 +40,12 @@ See [Security](docs/security.md), [Architecture](docs/architecture.md), and [Ope
 
 ## Deploy Atlassian Worker (manual GitHub Actions)
 
-The Bitbucket virtual tool takes its workspace **only** from the deploy-time,
-nonsecret `BITBUCKET_WORKSPACE_SLUG` Wrangler variable (currently `diamondhead`).
-There is no workspace slug literal in Worker source and no approval artifact,
-decision reference or digest. A missing or invalid variable disables the virtual
-tool. It lists the first page (up to 25 repos), with no caller-selected workspace.
-To switch workspace, change the Wrangler variable and redeploy; the caller
-cannot change it per request.
+The Bitbucket virtual tool takes its workspace **only** from the deploy-time
+`BITBUCKET_WORKSPACE_SLUG` value supplied by GitHub Actions repository variables.
+The workspace name is not committed in Worker source, Wrangler config or tests.
+A missing or invalid variable stops the deployment, and a missing/invalid Worker
+binding disables the virtual tool. Calls cannot override the workspace.
+The tool returns at most 25 repositories (first page only).
 
 The deployment workflow is `Deploy Atlassian Worker`
 (`.github/workflows/deploy-atlassian.yml`), and is **manual-only on `master`**.
@@ -58,7 +57,9 @@ One-time setup:
    **Edit Cloudflare Workers** permission for the specific deployment account.
    No tunnel token, OAuth cache or Relay/Portal Bearer should be moved to GitHub.
 2. In GitHub repository **Settings → Secrets and variables → Actions**, set
-   the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+   repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+   Under **Variables**, separately create `BITBUCKET_WORKSPACE_SLUG` and enter
+   the desired Bitbucket Workspace slug. Do not commit its value to Git.
 3. In Cloudflare, ensure the *existing* Worker `atlassian-rovo-mcp-bridge`
    still has `PORTAL_BEARER_TOKEN` and `LOCAL_RELAY_BEARER_TOKEN` as Worker
    **secrets**, and that `ATLASSIAN_RELAY_VPC` points at the intended private
@@ -71,15 +72,16 @@ The workflow installs dependencies, runs the Node tests, and then invokes
 the official `cloudflare/wrangler-action@v4` with
 `workers/atlassian/wrangler.jsonc`. It does **not** change OAuth scopes,
 register Atlassian clients, start Docker, or alter Cloudflare Tunnel settings.
-Existing Worker secrets are preserved by Wrangler deployments; Wrangler
-configuration remains the source of truth for plain-text variables.
+Existing Worker secrets are preserved by Wrangler deployments. The GitHub
+Actions workflow supplies `BITBUCKET_WORKSPACE_SLUG` using the Wrangler Action
+`vars` input; the other plain-text variables remain in Wrangler config.
 
 After a successful deployment, verify through the connected ChatGPT Portal:
 
 - `tools/list` exposes only `atlassianUserInfo`,
   `getAccessibleAtlassianResources`, and `listBitbucketRepositories`.
-- `listBitbucketRepositories({})` returns a maximum of 25 `diamondhead`
-  repositories with `name`, `slug`, and `truncated`.
+- `listBitbucketRepositories({})` returns at most 25 repositories from the
+  configured Workspace with `name`, `slug`, and `truncated`.
 - `discover`, direct generic `executeRead`, and write operations are not
   exposed or callable.
 
@@ -87,15 +89,17 @@ A green Actions deploy is **not** a substitute for that last runtime check.
 If deployment or the Portal check fails, inspect the Actions logs and Worker
 configuration without exposing Bearer tokens or OAuth cache contents.
 
-## Local validation and optional manual deploy
+## Local validation
 
 ```sh
 git status --short
 npm install --ignore-scripts --no-audit --no-fund
 npm test
-# Alternative to GitHub Actions, only after confirming the correct Cloudflare account:
-npm run deploy:atlassian
 ```
+
+Prefer the GitHub Actions deploy workflow: a local `wrangler deploy` without
+`--var BITBUCKET_WORKSPACE_SLUG:...` would not supply the required workspace
+binding.
 
 Do **not** overwrite local uncommitted changes just to deploy. Docker profiles
 for Relay and Tunnel are independently opt-in; do not run `docker compose down -v`,
