@@ -121,6 +121,22 @@ test('virtual read sends exactly one fixed VPC request and normalizes full_name 
   });
   assert.equal(JSON.stringify(response.body).includes('api.bitbucket.org'),false);
 });
+test('boolean nextPage controls truncated when next URL is absent',async()=>{
+  for (const nextPage of [true,false]) {
+    const response=await invoke(
+      makeWorker(),
+      mockEnv(async()=>result(61,{
+        values:[{name:'Backend',full_name:'diamondhead/backend'}],
+        nextPage,
+      })),
+      rpc('tools/call',{name:'listBitbucketRepositories',arguments:{}},61),
+    );
+    assert.equal(response.status,200);
+    const page=JSON.parse(response.body.result.content[0].text);
+    assert.equal(page.truncated,nextPage);
+    assert.deepEqual(page.repositories,[{name:'Backend',slug:'backend'}]);
+  }
+});
 test('invalid virtual arguments, disallowed direct read and malformed workspace do not reach upstream',async()=>{
   let calls=0;
   const w=makeWorker(),env=mockEnv(async()=>{calls++;throw Error('must not call');});
@@ -177,6 +193,9 @@ test('virtual tool detects invalid HTTP, JSON-RPC IDs, schema drift and workspac
     [result(79,{values:[{name:'x',full_name:'other/x'}]}),502,-32054],
     [result(79,{values:[{name:'x'}]}),502,-32054],
     [result(79,{next:123,values:[]}),502,-32054],
+    ...[null,'true',1,{},[]].map(nextPage=>[
+      result(79,{nextPage,values:[]}),502,-32054,
+    ]),
   ];
   for (const [upstream,status,code] of cases) {
     const output=await invoke(w,mockEnv(async()=>upstream),call);
