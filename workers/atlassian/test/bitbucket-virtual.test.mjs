@@ -39,7 +39,7 @@ async function invoke(worker,env,body) {
   const r=await worker.fetch(req(body),env);
   return {status:r.status,body:await r.json()};
 }
-test('production exposes fixed workspace only with matching Worker setting',async()=>{
+test('production exposes virtual tool only with a valid Worker workspace setting',async()=>{
   let calls=0;
   const fetcher=async()=>{calls++;return new Response(JSON.stringify({
     jsonrpc:'2.0',id:1,result:{tools:[{name:'executeRead'}]},
@@ -63,7 +63,9 @@ test('checked-in deployment config preserves VPC, nested-read denial and matchin
   const config=JSON.parse(readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8'));
   assert.equal(config.vars.ATLASSIAN_UPSTREAM_MODE,'local_relay_vpc');
   assert.equal(config.vars.ATLASSIAN_UNVERIFIED_READ_TOOLS,'off');
-  assert.equal(config.vars.BITBUCKET_WORKSPACE_SLUG,bitbucketVirtualTool.workspaceBinding.slug);
+  assert.equal(bitbucketVirtualTool.workspaceBinding.envKey,'BITBUCKET_WORKSPACE_SLUG');
+  assert.equal(Object.hasOwn(bitbucketVirtualTool.workspaceBinding,'slug'),false);
+  assert.equal(config.vars.BITBUCKET_WORKSPACE_SLUG,workspace);
   assert.equal(config.vpc_services[0].binding,'ATLASSIAN_RELAY_VPC');
   assert.deepEqual(config.secrets.required,['PORTAL_BEARER_TOKEN','LOCAL_RELAY_BEARER_TOKEN']);
 });
@@ -128,6 +130,39 @@ test('virtual read sends exactly one fixed VPC request and normalizes full_name 
   });
   assert.equal(JSON.stringify(response.body).includes('api.bitbucket.org'),false);
 });
+test('workspace is taken exclusively from validated Worker env, never from a source slug or caller',async()=>{
+  const alternative='team_two';
+  let upstreamCalls=0;
+  const env=mockEnv(async(url,opts)=>{
+    upstreamCalls++;
+    assert.equal(url,vpcUrl);
+    const body=JSON.parse(opts.body);
+    assert.deepEqual(body.params,{
+      name:'executeRead',
+      arguments:{
+        name:'listBitbucketRepositories',
+        inputs:{workspaceId:alternative,page:1,pagelen:25},
+      },
+    });
+    return result(62,{values:[{name:'Other Project',full_name:alternative+'/other-project'}]});
+  },{BITBUCKET_WORKSPACE_SLUG:alternative});
+  const good=await invoke(liveWorker,env,rpc('tools/call',{
+    name:'listBitbucketRepositories',arguments:{},
+  },62));
+  assert.equal(good.status,200);
+  assert.deepEqual(JSON.parse(good.body.result.content[0].text),{
+    schemaVersion:1,workspace:alternative,
+    repositories:[{name:'Other Project',slug:'other-project'}],truncated:false,
+  });
+  for (const arguments_ of [{workspace:'diamondhead'},{workspaceId:'diamondhead'}]) {
+    const denied=await invoke(liveWorker,env,rpc('tools/call',{
+      name:'listBitbucketRepositories',arguments:arguments_,
+    },63));
+    assert.equal(denied.status,400);
+    assert.equal(denied.body.error.code,-32602);
+  }
+  assert.equal(upstreamCalls,1);
+});
 test('boolean nextPage controls truncated when next URL is absent',async()=>{
   for (const nextPage of [true,false]) {
     const response=await invoke(
@@ -160,9 +195,11 @@ test('invalid virtual arguments, disallowed direct read and malformed workspace 
   },57));
   assert.equal(direct.status,403);
   for(const overrides of [
-    {BITBUCKET_WORKSPACE_SLUG:'other'},
+    {BITBUCKET_WORKSPACE_SLUG:''},
     {BITBUCKET_WORKSPACE_SLUG:undefined},
     {BITBUCKET_WORKSPACE_SLUG:'Diamondhead'},
+    {BITBUCKET_WORKSPACE_SLUG:'bad/workspace'},
+    {BITBUCKET_WORKSPACE_SLUG:' diamondhead'},
     {ATLASSIAN_UNVERIFIED_READ_TOOLS:'on'},
     {ATLASSIAN_UPSTREAM_MODE:'direct'},
   ]) {
