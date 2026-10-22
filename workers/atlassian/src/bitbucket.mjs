@@ -58,6 +58,9 @@ export const bitbucketVirtualTool = Object.freeze({
     if (typeof data.next === 'string' && data.next.length > 4096) {
       throw Error('bad_pagination');
     }
+    if (data.nextPage !== undefined && typeof data.nextPage !== 'boolean') {
+      throw Error('bad_pagination');
+    }
     const repositories = rows.slice(0,MAX_REPOSITORIES).map(r => {
       if (!plainObject(r) || typeof r.name !== 'string' ||
           r.name.length === 0 || byteLength(r.name) > MAX_NAME_BYTES ||
@@ -72,7 +75,7 @@ export const bitbucketVirtualTool = Object.freeze({
     // No continuation URL or raw upstream object can escape this projection.
     return {
       schemaVersion:1,workspace,repositories,
-      truncated:rows.length > MAX_REPOSITORIES || Boolean(data.next),
+      truncated:rows.length > MAX_REPOSITORIES || Boolean(data.next) || data.nextPage === true,
     };
   },
 });
