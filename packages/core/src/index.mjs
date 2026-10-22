@@ -101,11 +101,8 @@ function approvedVirtualWorkspace(config, env) {
       typeof v.description !== 'string' ||
       env.ATLASSIAN_UPSTREAM_MODE !== 'local_relay_vpc' ||
       env.ATLASSIAN_UNVERIFIED_READ_TOOLS !== 'off') return null;
-  const slug = v.workspaceBinding.slug;
-  if (typeof slug !== 'string' || !VIRTUAL_SLUG_RE.test(slug) ||
-      typeof env.BITBUCKET_WORKSPACE_SLUG !== 'string' ||
-      !VIRTUAL_SLUG_RE.test(env.BITBUCKET_WORKSPACE_SLUG) ||
-      env.BITBUCKET_WORKSPACE_SLUG !== slug) return null;
+  const slug = env.BITBUCKET_WORKSPACE_SLUG;
+  if (typeof slug !== 'string' || !VIRTUAL_SLUG_RE.test(slug)) return null;
   return slug;
 }
 function validateVirtualCall(payload) {
