@@ -40,54 +40,51 @@ See [Security](docs/security.md), [Architecture](docs/architecture.md), and [Ope
 
 ## Deploy Atlassian Worker (manual GitHub Actions)
 
-The Bitbucket virtual tool takes its workspace **only** from the deploy-time
-`BITBUCKET_WORKSPACE_SLUG` value supplied by GitHub Actions repository variables.
-The workspace name is not committed in Worker source, Wrangler config or tests.
-A missing or invalid variable stops the deployment, and a missing/invalid Worker
-binding disables the virtual tool. Calls cannot override the workspace.
-The tool returns at most 25 repositories (first page only).
+Workspace access is determined by the existing Atlassian Rovo OAuth session,
+not by a value configured in GitHub or Cloudflare. Only two dedicated read
+operations are exported:
+
+- `listBitbucketWorkspaces({})`: return a bounded first page of workspaces
+  visible to the authenticated Atlassian user.
+- `listBitbucketRepositories({workspaceId: "workspace-slug"})`: read at most
+  25 repositories from a selected workspace. Atlassian validates the effective
+  OAuth scope and per-workspace permission for this operation. Workspace IDs
+  are not selected or granted by this Worker.
+
+These operations use the pre-existing private VPC relay and OAuth session.
+The Worker does **not** expose raw `discover`, general-purpose `executeRead`
+or any write/destructive tool. The current read-only workspace enumeration
+and payload shape are based on the official Rovo catalog; confirm
+`listBitbucketWorkspaces`'s exact descriptor and live response using the
+local OAuth session before depending on it in production.
 
 The deployment workflow is `Deploy Atlassian Worker`
-(`.github/workflows/deploy-atlassian.yml`), and is **manual-only on `master`**.
+(`.github/workflows/deploy-atlassian.yml`) and is **manual-only on `master`**.
 Merging/pushing to `master` does **not** automatically deploy.
 
 One-time setup:
 
-1. In Cloudflare, create an account-scoped API token with the minimum
-   **Edit Cloudflare Workers** permission for the specific deployment account.
-   No tunnel token, OAuth cache or Relay/Portal Bearer should be moved to GitHub.
+1. Create an account-scoped Cloudflare API token with the minimum
+   **Edit Cloudflare Workers** permission for the intended deployment account.
 2. In GitHub repository **Settings → Secrets and variables → Actions**, set
    repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
-   Under **Variables**, separately create `BITBUCKET_WORKSPACE_SLUG` and enter
-   the desired Bitbucket Workspace slug. Do not commit its value to Git.
-3. In Cloudflare, ensure the *existing* Worker `atlassian-rovo-mcp-bridge`
-   still has `PORTAL_BEARER_TOKEN` and `LOCAL_RELAY_BEARER_TOKEN` as Worker
-   **secrets**, and that `ATLASSIAN_RELAY_VPC` points at the intended private
-   VPC service (service ID in `workers/atlassian/wrangler.jsonc`).
-   Wrangler's required-secrets declaration checks both on deployment.
-4. Merge the PR, then open GitHub **Actions → Deploy Atlassian Worker →
+   **No Bitbucket Workspace variable is needed.**
+3. Confirm that the existing Cloudflare Worker `atlassian-rovo-mcp-bridge`
+   still has `PORTAL_BEARER_TOKEN` and `LOCAL_RELAY_BEARER_TOKEN` as
+   Worker secrets, and that its `ATLASSIAN_RELAY_VPC` binding is correct.
+4. After review and merge, open GitHub **Actions → Deploy Atlassian Worker →
    Run workflow → master → Run workflow**.
 
-The workflow installs dependencies, runs the Node tests, and then invokes
-the official `cloudflare/wrangler-action@v4` with
-`workers/atlassian/wrangler.jsonc`. It does **not** change OAuth scopes,
-register Atlassian clients, start Docker, or alter Cloudflare Tunnel settings.
-Existing Worker secrets are preserved by Wrangler deployments. The GitHub
-Actions workflow supplies `BITBUCKET_WORKSPACE_SLUG` using the Wrangler Action
-`vars` input; the other plain-text variables remain in Wrangler config.
+The workflow installs dependencies, runs Node tests, then runs the official
+`cloudflare/wrangler-action@v4` with the existing Wrangler config. It does not
+change OAuth grants, local Docker data, the Cloudflare Tunnel or Worker Bearer
+secrets. After deployment, refresh the connected ChatGPT MCP tool list and
+confirm that it contains only the two existing Atlassian metadata tools and
+the two Bitbucket read tools above. Check that Workspace discovery, a selected
+repository list and an unauthorized Workspace denial behave as expected.
 
-After a successful deployment, verify through the connected ChatGPT Portal:
-
-- `tools/list` exposes only `atlassianUserInfo`,
-  `getAccessibleAtlassianResources`, and `listBitbucketRepositories`.
-- `listBitbucketRepositories({})` returns at most 25 repositories from the
-  configured Workspace with `name`, `slug`, and `truncated`.
-- `discover`, direct generic `executeRead`, and write operations are not
-  exposed or callable.
-
-A green Actions deploy is **not** a substitute for that last runtime check.
-If deployment or the Portal check fails, inspect the Actions logs and Worker
-configuration without exposing Bearer tokens or OAuth cache contents.
+A green deployment is not proof of the live Rovo operation shape or the
+effective OAuth consent boundary.
 
 ## Local validation
 
@@ -96,10 +93,6 @@ git status --short
 npm install --ignore-scripts --no-audit --no-fund
 npm test
 ```
-
-Prefer the GitHub Actions deploy workflow: a local `wrangler deploy` without
-`--var BITBUCKET_WORKSPACE_SLUG:...` would not supply the required workspace
-binding.
 
 Do **not** overwrite local uncommitted changes just to deploy. Docker profiles
 for Relay and Tunnel are independently opt-in; do not run `docker compose down -v`,
