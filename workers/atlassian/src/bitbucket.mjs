@@ -6,8 +6,8 @@ const MAX_SLUG_BYTES = 128;
 const byteLength = s => new TextEncoder().encode(s).length;
 const plainObject = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 
-// Fixed workspace is selected by source and must match the independent
-// BITBUCKET_WORKSPACE_SLUG Worker variable. No caller can choose a workspace.
+// The deploy-time BITBUCKET_WORKSPACE_SLUG Worker variable is the sole
+// workspace source. The caller cannot select or override it.
 export const bitbucketVirtualTool = Object.freeze({
   publicName: 'listBitbucketRepositories',
   description: 'List up to 25 repositories from the fixed Bitbucket workspace (first page only).',
@@ -15,7 +15,6 @@ export const bitbucketVirtualTool = Object.freeze({
   internalToolName: 'executeRead',
   internalOperationName: 'listBitbucketRepositories',
   workspaceBinding: Object.freeze({
-    slug: 'diamondhead',
     envKey: 'BITBUCKET_WORKSPACE_SLUG',
   }),
   buildInputs: ({workspace}) => ({workspaceId:workspace,page:1,pagelen:MAX_REPOSITORIES}),
