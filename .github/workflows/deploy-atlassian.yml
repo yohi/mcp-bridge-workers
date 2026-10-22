@@ -25,13 +25,18 @@ jobs:
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run tests before deploying
         run: npm test
-      - name: Check deploy credentials are configured
+      - name: Check deployment settings
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BITBUCKET_WORKSPACE_SLUG: ${{ vars.BITBUCKET_WORKSPACE_SLUG }}
         run: |
           if [ -z "$CF_API_TOKEN" ] || [ -z "$CF_ACCOUNT_ID" ]; then
             echo "::error::Configure CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in repository Actions secrets"
+            exit 1
+          fi
+          if [[ ! "$BITBUCKET_WORKSPACE_SLUG" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+            echo "::error::Configure a valid BITBUCKET_WORKSPACE_SLUG in repository Actions variables"
             exit 1
           fi
       - name: Deploy existing Atlassian Worker via Wrangler
@@ -41,3 +46,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/atlassian
           command: deploy --config wrangler.jsonc
+          vars: |
+            BITBUCKET_WORKSPACE_SLUG
+        env:
+          BITBUCKET_WORKSPACE_SLUG: ${{ vars.BITBUCKET_WORKSPACE_SLUG }}
