@@ -8,7 +8,7 @@ import {bitbucketVirtualTool} from '../src/bitbucket.mjs';
 const portal='p'.repeat(48);
 const relay='r'.repeat(48);
 const vpcUrl='http://127.0.0.1/mcp';
-const workspace='diamondhead';
+const workspace='test-workspace';
 const enabledSpec=bitbucketVirtualTool;
 const makeWorker=()=>createMcpRelay({
   name:'test-atlassian',upstreamUrl:'https://mcp.atlassian.com/v2/mcp',
@@ -65,7 +65,12 @@ test('checked-in deployment config preserves VPC, nested-read denial and matchin
   assert.equal(config.vars.ATLASSIAN_UNVERIFIED_READ_TOOLS,'off');
   assert.equal(bitbucketVirtualTool.workspaceBinding.envKey,'BITBUCKET_WORKSPACE_SLUG');
   assert.equal(Object.hasOwn(bitbucketVirtualTool.workspaceBinding,'slug'),false);
-  assert.equal(config.vars.BITBUCKET_WORKSPACE_SLUG,workspace);
+  assert.equal(Object.hasOwn(config.vars,'BITBUCKET_WORKSPACE_SLUG'),false);
+  const deployWorkflow=readFileSync(
+    new URL('../../../.github/workflows/deploy-atlassian.yml',import.meta.url),'utf8');
+  assert.match(deployWorkflow,/vars\.BITBUCKET_WORKSPACE_SLUG/);
+  assert.match(deployWorkflow,/\bvars: \|\s+BITBUCKET_WORKSPACE_SLUG/);
+  assert.match(deployWorkflow,/Configure a valid BITBUCKET_WORKSPACE_SLUG/);
   assert.equal(config.vpc_services[0].binding,'ATLASSIAN_RELAY_VPC');
   assert.deepEqual(config.secrets.required,['PORTAL_BEARER_TOKEN','LOCAL_RELAY_BEARER_TOKEN']);
 });
@@ -109,12 +114,12 @@ test('virtual read sends exactly one fixed VPC request and normalizes full_name 
     assert.deepEqual(body,rpc('tools/call',{
       name:'executeRead',arguments:{
         name:'listBitbucketRepositories',
-        inputs:{workspaceId:'diamondhead',page:1,pagelen:25},
+        inputs:{workspaceId:'test-workspace',page:1,pagelen:25},
       },
     },55));
     return result(55,{values:[
-      {name:'Android App',full_name:'diamondhead/android-app'},
-      {name:'Backend',full_name:'diamondhead/backend'},
+      {name:'Android App',full_name:'test-workspace/android-app'},
+      {name:'Backend',full_name:'test-workspace/backend'},
     ],next:'https://api.bitbucket.org/private'});
   });
   const response=await invoke(makeWorker(),env,rpc('tools/call',{
@@ -124,7 +129,7 @@ test('virtual read sends exactly one fixed VPC request and normalizes full_name 
   assert.equal(hits,1);
   assert.equal(response.body.result.isError,false);
   assert.deepEqual(JSON.parse(response.body.result.content[0].text),{
-    schemaVersion:1,workspace:'diamondhead',
+    schemaVersion:1,workspace:'test-workspace',
     repositories:[{name:'Android App',slug:'android-app'},{name:'Backend',slug:'backend'}],
     truncated:true,
   });
@@ -154,7 +159,7 @@ test('workspace is taken exclusively from validated Worker env, never from a sou
     schemaVersion:1,workspace:alternative,
     repositories:[{name:'Other Project',slug:'other-project'}],truncated:false,
   });
-  for (const arguments_ of [{workspace:'diamondhead'},{workspaceId:'diamondhead'}]) {
+  for (const arguments_ of [{workspace:'test-workspace'},{workspaceId:'test-workspace'}]) {
     const denied=await invoke(liveWorker,env,rpc('tools/call',{
       name:'listBitbucketRepositories',arguments:arguments_,
     },63));
@@ -168,7 +173,7 @@ test('boolean nextPage controls truncated when next URL is absent',async()=>{
     const response=await invoke(
       makeWorker(),
       mockEnv(async()=>result(61,{
-        values:[{name:'Backend',full_name:'diamondhead/backend'}],
+        values:[{name:'Backend',full_name:'test-workspace/backend'}],
         nextPage,
       })),
       rpc('tools/call',{name:'listBitbucketRepositories',arguments:{}},61),
@@ -191,15 +196,15 @@ test('invalid virtual arguments, disallowed direct read and malformed workspace 
   }
   const direct=await invoke(w,env,rpc('tools/call',{
     name:'executeRead',arguments:{name:'listBitbucketRepositories',
-      inputs:{workspaceId:'diamondhead'}},
+      inputs:{workspaceId:'test-workspace'}},
   },57));
   assert.equal(direct.status,403);
   for(const overrides of [
     {BITBUCKET_WORKSPACE_SLUG:''},
     {BITBUCKET_WORKSPACE_SLUG:undefined},
-    {BITBUCKET_WORKSPACE_SLUG:'Diamondhead'},
+    {BITBUCKET_WORKSPACE_SLUG:'InvalidUpperCase'},
     {BITBUCKET_WORKSPACE_SLUG:'bad/workspace'},
-    {BITBUCKET_WORKSPACE_SLUG:' diamondhead'},
+    {BITBUCKET_WORKSPACE_SLUG:' test-workspace'},
     {ATLASSIAN_UNVERIFIED_READ_TOOLS:'on'},
     {ATLASSIAN_UPSTREAM_MODE:'direct'},
   ]) {
@@ -251,7 +256,7 @@ test('virtual tool detects invalid HTTP, JSON-RPC IDs, schema drift and workspac
 test('oversized response and collision in upstream list both fail closed',async()=>{
   const w=makeWorker();
   const giant=await invoke(w,mockEnv(async()=>result(51,{
-    values:[{name:'x'.repeat(263_000),full_name:'diamondhead/x'}],
+    values:[{name:'x'.repeat(263_000),full_name:'test-workspace/x'}],
   })),rpc('tools/call',{name:'listBitbucketRepositories',arguments:{}},51));
   assert.equal(giant.status,502);
   assert.equal(giant.body.error.code,-32054);
