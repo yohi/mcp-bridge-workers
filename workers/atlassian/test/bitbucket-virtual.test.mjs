@@ -47,7 +47,9 @@ async function invoke(worker,env,body) {
 }
 test('unapproved production virtual tool remains invisible and fails closed',async()=>{
   let calls=0;
-  const env=mockEnv(async()=>{calls++;return result(1,{values:[]});});
+  const env=mockEnv(async()=>{calls++;return new Response(JSON.stringify({
+    jsonrpc:'2.0',id:1,result:{tools:[{name:'executeRead'}]},
+  }),{headers:{'content-type':'application/json'}});});
   const list=await invoke(liveWorker,env,rpc('tools/list',{},1));
   assert.equal(list.status,200);
   assert.equal(list.body.result.tools.length,0);
@@ -169,7 +171,7 @@ test('virtual tool detects invalid HTTP, JSON-RPC IDs, schema drift and workspac
     [new Response('no',{status:429} ),502,-32053],
     [new Response('no',{status:404} ),502,-32055],
     [new Response('no',{status:302,headers:{location:'https://evil.example'}}),502,-32053],
-    [new Response('no',{status:204}),502,-32054],
+    [new Response(null,{status:204}),502,-32054],
     [new Response('not-json',{headers:{'content-type':'application/json'}}),502,-32054],
     [result(80,{values:[]}),502,-32054],
     [result(79,{values:[{name:'x',full_name:'other/x'}]}),502,-32054],
