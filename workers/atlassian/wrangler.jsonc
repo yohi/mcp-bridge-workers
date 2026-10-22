@@ -16,8 +16,7 @@
   ],
   "vars": {
     "ATLASSIAN_UPSTREAM_MODE": "local_relay_vpc",
-    "ATLASSIAN_UNVERIFIED_READ_TOOLS": "off",
-    "BITBUCKET_WORKSPACE_SLUG": "diamondhead"
+    "ATLASSIAN_UNVERIFIED_READ_TOOLS": "off"
   },
   "secrets": {
     "required": ["PORTAL_BEARER_TOKEN", "LOCAL_RELAY_BEARER_TOKEN"]
